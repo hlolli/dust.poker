@@ -10,7 +10,11 @@ Layout:
 - `src/scene/` -- Three.js: room, table, seats, rail controls, avatars
 - `src/poker/` -- pure TypeScript poker: cards, hand ranking, payouts, bots; no Three.js, no I/O
 - `src/referee/` -- the `TableState` / `act()` seam and its implementations (practice, live)
+- `contracts/*.compact` -- the Midnight contracts (the referee); `contracts/build/` is compiler output, not committed
+- `scripts/` -- `fetch-compact.ts` downloads the compiler version pinned in package.json `config.compactc` into `.compact/`; `build-contracts.ts` compiles every contract (`--zk` also builds proving keys)
 - `docs/adr/` decisions, `CONTEXT.md` glossary, `docs/agents/` skill config
+
+Contracts: `bun run compact:build` before `bun test`; `bun run check` does it. Contract tests live next to the source (`contracts/*.test.ts`) and run the compiled circuits locally through `@midnight-ntwrk/compact-runtime`, no chain, no proof server.
 
 Root holds only files that must be there (package.json, bun.lock, tsconfig.json, vercel.json, LICENSE, README.md, AGENTS.md, CONTEXT.md).
 

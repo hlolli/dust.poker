@@ -2,14 +2,20 @@
   "name": "dust.poker",
   "private": true,
   "type": "module",
+  "config": {
+    "compactc": "0.34.0"
+  },
   "scripts": {
     "dev": "bun src/index.html",
     "build": "bun build src/index.html --outdir dist --minify",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "check": "bun run typecheck && bun test && bun run build"
+    "compact:fetch": "bun scripts/fetch-compact.ts",
+    "compact:build": "bun scripts/build-contracts.ts",
+    "check": "bun run compact:build && bun run typecheck && bun test && bun run build"
   },
   "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "0.19.0",
     "three": "0.186.0"
   },
   "devDependencies": {

@@ -12,6 +12,7 @@ jobs:
         with:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
+      - run: bun run compact:build
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
