@@ -1,5 +1,19 @@
 # dust.poker
 
+## Development
+
+Bun for everything: `bun install`, `bun dev` (dev server, hot reload), `bun test`, `bun run typecheck`, `bun run build`. Run `bun run check` before committing. Tests sit next to the code as `*.test.ts` and use `bun:test`. No npm, pnpm, yarn, vitest or vite.
+
+Layout:
+
+- `src/index.html`, `src/main.ts` -- entry; the only place that touches `document` and the renderer
+- `src/scene/` -- Three.js: room, table, seats, rail controls, avatars
+- `src/poker/` -- pure TypeScript poker: cards, hand ranking, payouts, bots; no Three.js, no I/O
+- `src/referee/` -- the `TableState` / `act()` seam and its implementations (practice, live)
+- `docs/adr/` decisions, `CONTEXT.md` glossary, `docs/agents/` skill config
+
+Root holds only files that must be there (package.json, bun.lock, tsconfig.json, vercel.json, LICENSE, README.md, AGENTS.md, CONTEXT.md).
+
 ## Agent skills
 
 ### Issue tracker
