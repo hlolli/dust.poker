@@ -1,0 +1,7 @@
+{
+  "name": "spike-compact-browser",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "bun index.html --port 3001", "build": "bun build index.html --outdir dist" },
+  "dependencies": { "@midnight-ntwrk/compact-runtime": "0.14.0" }
+}
