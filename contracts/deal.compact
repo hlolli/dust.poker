@@ -1,23 +1,32 @@
-// Dealing: mental poker on Jubjub ElGamal, with the bookkeeping that makes the circuits a
-// referee: who sits where, whose step it is, and by when. See docs/protocol/dealing.md.
+// The table's referee: mental poker dealing on Jubjub ElGamal, and No-Limit Hold'em betting
+// on top of it. See docs/protocol/dealing.md.
 //
 // One deal at a time (pipelining later). Phases:
-//   start_deal   idle, playing or aborted -> keys; the players are the seats occupied now
+//   start_deal   idle, done or aborted -> keys; the players are the seats with chips now;
+//                the dealer button moves, the blinds are posted
 //   post_key     keys -> shuffle once every player has posted
 //   shuffle      in seat order; the last one -> holes
-//   shares       the other players' hole positions; once everyone has -> playing.
-//                Board positions may be shared from the holes phase on; gating them by
-//                street arrives with betting.
+//   shares       the other players' hole positions; once everyone has -> playing, and the
+//                betting clock starts
+//   release      a player's shares for the board positions of the street being released;
+//                once every player still in has -> playing again
+//   act          check, call or raise that leaves chips behind
+//   act_out      fold, or a call or raise that leaves the player all in; carries the
+//                player's shares for every board position, so the deal never waits on them
 //   expire       anyone, once the deadline has passed -> aborted, the seat that owed the
-//                step is recorded for the stakes contract to settle.
+//                step is recorded for the stakes contract to settle
+//   A street whose betting closes moves to release (or showdown after the river); a deal
+//   that folds down to one player pays them and is done. Showdown settlement is the next
+//   piece of work; a deal in showdown waits there.
 //
 // Deadlines are block time in seconds. A caller states `now`; the contract checks it against
 // the block (blockTimeGte, blockTimeLt) to within CLOCK_SLACK and sets the next deadline
-// from it. sit() is a stand-in for seating.compact until the two merge with the pot.
+// from it. sit() is a stand-in for seating.compact until the two merge, and its chips are
+// test chips until the escrow of ADR 0007.
 
 import CompactStandardLibrary;
 
-enum Phase { idle, keys, shuffle, holes, playing, aborted }
+enum Phase { idle, keys, shuffle, holes, playing, release, showdown, done, aborted }
 
 struct Locked {
   a: JubjubPoint,
@@ -29,22 +38,41 @@ struct Locked {
 circuit KEYS_SECONDS(): Uint<64> { return 60; }
 circuit SHUFFLE_SECONDS(): Uint<64> { return 240; }
 circuit HOLES_SECONDS(): Uint<64> { return 90; }
+circuit RELEASE_SECONDS(): Uint<64> { return 90; }
+// The betting clock. ponytail: no time bank yet; add one per deal when the client has a clock.
+circuit ACT_SECONDS(): Uint<64> { return 30; }
 circuit CLOCK_SLACK(): Uint<64> { return 120; }
 circuit NONE(): Uint<8> { return 255; }
+circuit BIG_BLIND(): Uint<64> { return 2; }
+circuit BUY_IN(): Uint<64> { return 200; }
 
 // Seats: seat -> the player's key point. A player's identity is ecMulGenerator(secret):
 // 360 rows, against 3,900 for the SHA-256 identity in seating.compact, which switches to
 // this at the merge.
 export ledger seat_owner: Map<Uint<8>, JubjubPoint>;
+export ledger stack: Vector<6, Uint<64>>;
 
 // The deal in progress.
 export ledger phase: Phase;
 export ledger deal_no: Counter;
 export ledger in_deal: Vector<6, Boolean>;
 export ledger n_players: Uint<8>;
+export ledger dealer: Uint<8>;
 export ledger turn: Uint<8>; // seat whose shuffle is next
 export ledger deadline: Uint<64>; // block time by which the awaited step must arrive; 0 when none
 export ledger offender: Uint<8>; // seat that missed the deadline, when aborted
+
+// Betting.
+export ledger street: Uint<8>; // 0 preflop, 1 flop, 2 turn, 3 river
+export ledger release_street: Uint<8>; // the street whose board is being released
+export ledger to_act: Uint<8>;
+export ledger current_bet: Uint<64>;
+export ledger min_raise: Uint<64>; // size of the last full raise
+export ledger bet: Vector<6, Uint<64>>; // committed this street
+export ledger total: Vector<6, Uint<64>>; // committed this deal
+export ledger folded: Vector<6, Boolean>;
+export ledger all_in: Vector<6, Boolean>;
+export ledger acted: Vector<6, Boolean>; // has acted since the last full raise this street
 
 // The deck for the current deal: 52 locked cards.
 export ledger deck: Vector<52, Locked>;
@@ -61,6 +89,9 @@ export ledger shares_posted: Map<Uint<16>, JubjubPoint>;
 // seat -> distinct hole positions of others it has shared
 export ledger hole_shares: Map<Uint<8>, Uint<8>>;
 export ledger holes_done: Counter;
+// seat -> distinct board positions it has shared (the board releases in order, so this is
+// how far the seat has released)
+export ledger board_shares: Map<Uint<8>, Uint<8>>;
 
 witness player_secret(): JubjubScalar;
 witness deck_key(): JubjubScalar;
@@ -75,6 +106,14 @@ circuit indices(): Vector<52, Uint<8>> {
 
 circuit seats(): Vector<6, Uint<8>> {
   return [0, 1, 2, 3, 4, 5];
+}
+
+circuit zeros(): Vector<6, Uint<64>> {
+  return [0, 0, 0, 0, 0, 0];
+}
+
+circuit falses(): Vector<6, Boolean> {
+  return [false, false, false, false, false, false];
 }
 
 circuit identity(): JubjubPoint {
@@ -105,9 +144,29 @@ circuit check_now(now: Uint<64>): [] {
   assert(blockTimeLt((now + CLOCK_SLACK()) as Uint<64>), "clock behind the chain");
 }
 
-circuit in_deal_at(s: Uint<8>): Boolean {
-  const v = in_deal;
+// Vectors are indexed by constants only; these select and replace by a runtime seat.
+circuit at_b(v: Vector<6, Boolean>, s: Uint<8>): Boolean {
   return fold((acc: Boolean, k: Uint<8>): Boolean => (k == s ? v[k] : acc), false, seats());
+}
+
+circuit at_u(v: Vector<6, Uint<64>>, s: Uint<8>): Uint<64> {
+  return fold((acc: Uint<64>, k: Uint<8>): Uint<64> => (k == s ? v[k] : acc), 0, seats());
+}
+
+circuit set_b(v: Vector<6, Boolean>, s: Uint<8>, x: Boolean): Vector<6, Boolean> {
+  return map((k: Uint<8>): Boolean => (k == s ? x : v[k]), seats());
+}
+
+circuit set_u(v: Vector<6, Uint<64>>, s: Uint<8>, x: Uint<64>): Vector<6, Uint<64>> {
+  return map((k: Uint<8>): Uint<64> => (k == s ? x : v[k]), seats());
+}
+
+circuit min_u(a: Uint<64>, b: Uint<64>): Uint<64> {
+  return a < b ? a : b;
+}
+
+circuit sum_u(v: Vector<6, Uint<64>>): Uint<64> {
+  return fold((acc: Uint<64>, x: Uint<64>): Uint<64> => (acc + x) as Uint<64>, 0, v);
 }
 
 // Dealing order of seat s: how many players in the deal sit below it.
@@ -121,14 +180,55 @@ circuit first_in_deal(): Uint<8> {
   return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k]) ? k : acc), NONE(), seats());
 }
 
-// The next seat in the deal after `after`, or NONE.
+// The next seat in the deal after `after` in seat order, or NONE.
 circuit next_in_deal(after: Uint<8>): Uint<8> {
   const v = in_deal;
   return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && k > after && v[k]) ? k : acc), NONE(), seats());
 }
 
+// The next seat in the deal after `start`, going round the table.
+circuit next_round(start: Uint<8>): Uint<8> {
+  const nxt = next_in_deal(start);
+  return nxt == NONE() ? first_in_deal() : nxt;
+}
+
+// The next seat after `start`, round the table, that still has a decision to make.
+circuit next_actor(start: Uint<8>, f: Vector<6, Boolean>, a: Vector<6, Boolean>): Uint<8> {
+  const v = in_deal;
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => {
+    const raw = (start + k) as Uint<8>;
+    const i = raw >= 6 ? (raw - 6) as Uint<8> : raw;
+    return (acc == NONE() && at_b(v, i) && !at_b(f, i) && !at_b(a, i)) ? i : acc;
+  }, NONE(), [1, 2, 3, 4, 5, 6]);
+}
+
+circuit live_count(f: Vector<6, Boolean>): Uint<8> {
+  const v = in_deal;
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((v[k] && !f[k]) ? (acc + 1) as Uint<8> : acc), 0 as Uint<8>, seats());
+}
+
+circuit actor_count(f: Vector<6, Boolean>, a: Vector<6, Boolean>): Uint<8> {
+  const v = in_deal;
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((v[k] && !f[k] && !a[k]) ? (acc + 1) as Uint<8> : acc), 0 as Uint<8>, seats());
+}
+
+// Someone with a decision left has not acted since the last full raise, or has less in.
+circuit round_open(f: Vector<6, Boolean>, a: Vector<6, Boolean>, ac: Vector<6, Boolean>, b: Vector<6, Uint<64>>, cb: Uint<64>): Boolean {
+  const v = in_deal;
+  return fold((acc: Boolean, k: Uint<8>): Boolean => (acc || (v[k] && !f[k] && !a[k] && (!ac[k] || b[k] != cb))), false, seats());
+}
+
 circuit hole_count(s: Uint<8>): Uint<8> {
   return hole_shares.member(s) ? hole_shares.lookup(s) : 0 as Uint<8>;
+}
+
+circuit board_count(s: Uint<8>): Uint<8> {
+  return board_shares.member(s) ? board_shares.lookup(s) : 0 as Uint<8>;
+}
+
+// Board positions in play up to and including a street: 0, 3, 4, 5.
+circuit board_len(st: Uint<8>): Uint<8> {
+  return st == 0 ? 0 : (st == 1 ? 3 : (st == 2 ? 4 : 5));
 }
 
 constructor() {
@@ -137,21 +237,28 @@ constructor() {
   fresh = fresh_deck();
   deck = fresh;
   offender = NONE();
+  dealer = NONE();
+  to_act = NONE();
+  stack = zeros();
 }
 
+// Takes a seat with a test stack. Escrow of a real asset is ADR 0007's work.
 export circuit sit(seat: Uint<8>): [] {
   const s = disclose(seat);
   assert(s < 6, "no such seat");
   assert(!seat_owner.member(s), "seat taken");
   seat_owner.insert(s, disclose(me()));
+  stack = set_u(stack, s, BUY_IN());
 }
 
-// Anyone may start a deal. The players are whoever is seated now.
+// Anyone may start a deal. The players are whoever is seated with chips; the button moves
+// to the next of them; the blinds go in now, though betting waits for the hole cards.
 export circuit start_deal(claimed_now: Uint<64>): [] {
-  assert(phase != Phase.keys && phase != Phase.shuffle && phase != Phase.holes, "deal in progress");
+  assert(phase == Phase.idle || phase == Phase.done || phase == Phase.aborted, "deal in progress");
   const now = disclose(claimed_now);
   check_now(now);
-  const present = map((s: Uint<8>): Boolean => seat_owner.member(s), seats());
+  const st = stack;
+  const present = map((s: Uint<8>): Boolean => seat_owner.member(s) && st[s] > 0, seats());
   const n = fold((acc: Uint<8>, b: Boolean): Uint<8> => (b ? (acc + 1) as Uint<8> : acc), 0 as Uint<8>, present);
   assert(n >= 2, "not enough players");
   in_deal = present;
@@ -165,7 +272,30 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
   shares_posted.resetToDefault();
   hole_shares.resetToDefault();
   holes_done.resetToDefault();
+  board_shares.resetToDefault();
   offender = NONE();
+
+  // Button and blinds. Heads up, the dealer is the small blind and acts first preflop.
+  const d = dealer == NONE() ? first_in_deal() : next_round(dealer);
+  dealer = d;
+  const sb = n == 2 ? d : next_round(d);
+  const bb = next_round(sb);
+  const sb_amt = min_u(1, at_u(st, sb));
+  const bb_amt = min_u(BIG_BLIND(), at_u(st, bb));
+  const st1 = set_u(set_u(st, sb, (at_u(st, sb) - sb_amt) as Uint<64>), bb, (at_u(st, bb) - bb_amt) as Uint<64>);
+  const b1 = set_u(set_u(zeros(), sb, sb_amt), bb, bb_amt);
+  const a1 = set_b(set_b(falses(), sb, sb_amt == at_u(st, sb)), bb, bb_amt == at_u(st, bb));
+  stack = st1;
+  bet = b1;
+  total = b1;
+  folded = falses();
+  all_in = a1;
+  acted = falses();
+  street = 0;
+  current_bet = BIG_BLIND();
+  min_raise = BIG_BLIND();
+  to_act = next_actor(bb, falses(), a1);
+
   phase = Phase.keys;
   deadline = (now + KEYS_SECONDS()) as Uint<64>;
 }
@@ -175,7 +305,7 @@ export circuit post_key(seat: Uint<8>, claimed_now: Uint<64>): JubjubPoint {
   assert(phase == Phase.keys, "not posting keys");
   const s = disclose(seat);
   owner_check(s);
-  assert(in_deal_at(s), "not in this deal");
+  assert(at_b(in_deal, s), "not in this deal");
   assert(!keys.member(s), "seat already has a key");
   const now = disclose(claimed_now);
   check_now(now);
@@ -246,47 +376,225 @@ export circuit shuffle(seat: Uint<8>, claimed_now: Uint<64>): [] {
   }
 }
 
-// Phase 2+. Shares for ten positions in one proof, all against the caller's posted key: the
-// other players' hole positions at the start of a deal, or a street's board positions. For
-// fewer than ten, repeat a position; a duplicate share is the same point and reveals
-// nothing new. A player's own hole positions are refused, as are positions never dealt.
-// Every share is recorded under pos * 8 + seat; readers take them from the ledger.
+// One decryption share for a position, recorded under pos * 8 + seat. The deck is passed
+// in: reading it from the ledger costs about a thousand rows each time.
+circuit post_share(s: Uint<8>, pos: Uint<8>, x: JubjubScalar, d: Vector<52, Locked>): [] {
+  const c = fold((acc: Locked, k: Uint<8>): Locked => (k == pos ? d[k] : acc), d[0], indices());
+  shares_posted.insert(((pos as Uint<16>) * 8 + (s as Uint<16>)) as Uint<16>, disclose(ecMul(c.a, x)));
+}
+
+// Every player still in has released up to street `rs`.
+circuit released(f: Vector<6, Boolean>, rs: Uint<8>): Boolean {
+  const v = in_deal;
+  const need = board_len(rs);
+  return fold((acc: Boolean, k: Uint<8>): Boolean => (acc && (!v[k] || f[k] || board_count(k) >= need)), true, seats());
+}
+
+// A street's betting is over: on to the next release, or to showdown after the river.
+circuit close_street(now: Uint<64>, f: Vector<6, Boolean>, a: Vector<6, Boolean>): [] {
+  to_act = NONE();
+  // With one or no player left to act, the whole board runs out in one release.
+  const rs = actor_count(f, a) <= 1 ? 3 : (street + 1) as Uint<8>;
+  if (street == 3 || released(f, rs)) {
+    // After the river, or when everyone still in is all in and has already posted every
+    // board share: nothing to wait for.
+    street = 3;
+    phase = Phase.showdown;
+    deadline = 0;
+  } else {
+    release_street = rs;
+    phase = Phase.release;
+    deadline = (now + RELEASE_SECONDS()) as Uint<64>;
+  }
+}
+
+// The released street's betting begins, unless nobody is left to bet.
+circuit resume_betting(now: Uint<64>): [] {
+  street = release_street;
+  bet = zeros();
+  acted = falses();
+  current_bet = 0;
+  min_raise = BIG_BLIND();
+  const f = folded;
+  const a = all_in;
+  if (actor_count(f, a) > 1) {
+    phase = Phase.playing;
+    to_act = next_actor(dealer, f, a);
+    deadline = (now + ACT_SECONDS()) as Uint<64>;
+  } else {
+    close_street(now, f, a);
+  }
+}
+
+// Phase 2. Shares for the other players' ten hole positions in one proof, all against the
+// caller's posted key. For fewer than ten, repeat a position; a duplicate share is the same
+// point and reveals nothing new. A player's own hole positions are refused, as are board
+// positions (see release) and positions never dealt.
 // Knowing the deck key behind the seat's posted point is the ownership proof here: only
 // the seat's owner could post that key, and a second identity check would cost 400 rows.
-export circuit shares(seat: Uint<8>, positions: Vector<10, Uint<8>>): [] {
-  assert(phase == Phase.holes || phase == Phase.playing, "deck not ready");
+export circuit shares(seat: Uint<8>, positions: Vector<10, Uint<8>>, claimed_now: Uint<64>): [] {
+  assert(phase == Phase.holes, "no hole shares wanted now");
   const s = disclose(seat);
   const ps = disclose(positions);
   const x = deck_key();
   assert(keys.member(s), "seat has no deck key");
   assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  const now = disclose(claimed_now);
+  check_now(now);
   const n = n_players;
   const own = (order_of(s) * 2) as Uint<8>;
-  const dealt = (n * 2 + 5) as Uint<8>;
   const holes = (n * 2) as Uint<8>;
   const before = hole_count(s);
   const d = deck;
-  const idx = indices();
   for (const i of 0..10) {
     const pos = ps[i];
     assert(pos != own && pos != ((own + 1) as Uint<8>), "own hole card");
-    assert(pos < dealt, "position not dealt");
-    const c = fold((acc: Locked, k: Uint<8>): Locked => (k == pos ? d[k] : acc), d[0], idx);
+    assert(pos < holes, "board card not released yet");
     const key = ((pos as Uint<16>) * 8 + (s as Uint<16>)) as Uint<16>;
-    if (pos < holes && !shares_posted.member(key)) {
+    if (!shares_posted.member(key)) {
       hole_shares.insert(s, (hole_count(s) + 1) as Uint<8>);
     }
-    shares_posted.insert(key, disclose(ecMul(c.a, x)));
+    post_share(s, pos, x, d);
   }
-  // Once every player has shared every other player's hole positions, play can begin.
+  // Once every player has shared every other player's hole positions, betting begins.
   const need = (holes - 2) as Uint<8>;
-  if (phase == Phase.holes && before < need && hole_count(s) == need) {
+  if (before < need && hole_count(s) == need) {
     holes_done.increment(1);
     if (holes_done == n as Uint<64>) {
       phase = Phase.playing;
-      deadline = 0;
+      deadline = (now + ACT_SECONDS()) as Uint<64>;
     }
   }
+}
+
+// Phase 3+. A player's shares for the board positions of the street being released: three
+// for the flop, one for the turn or river, all five when the board runs out. Slots beyond
+// the street repeat its first position, so every share posted is one the street calls for.
+export circuit release(seat: Uint<8>, claimed_now: Uint<64>): [] {
+  assert(phase == Phase.release, "nothing to release");
+  const s = disclose(seat);
+  const x = deck_key();
+  assert(keys.member(s), "seat has no deck key");
+  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  const now = disclose(claimed_now);
+  check_now(now);
+  const holes = (n_players * 2) as Uint<8>;
+  const lo = (holes + board_len(street)) as Uint<8>;
+  const hi = (holes + board_len(release_street)) as Uint<8>;
+  const d = deck;
+  for (const i of 0..5) {
+    const pos = (lo + i) < hi ? (lo + i) as Uint<8> : lo;
+    const key = ((pos as Uint<16>) * 8 + (s as Uint<16>)) as Uint<16>;
+    if (!shares_posted.member(key)) {
+      board_shares.insert(s, (board_count(s) + 1) as Uint<8>);
+    }
+    post_share(s, pos, x, d);
+  }
+  if (released(folded, release_street)) {
+    resume_betting(now);
+  }
+}
+
+// The betting rules of src/poker/deal.ts, once: the amount a legal action commits.
+// kind: 0 fold or check (nothing), 1 call, 2 raise to `t`.
+circuit action_amount(s: Uint<8>, kind: Uint<8>, t: Uint<64>, f: Vector<6, Boolean>, a: Vector<6, Boolean>): Uint<64> {
+  const st = at_u(stack, s);
+  const b = at_u(bet, s);
+  const cb = current_bet;
+  const to_call = (cb - b) as Uint<64>;
+  const is_call = kind == 1;
+  const is_raise = kind == 2;
+  assert(kind <= 2, "unknown action");
+  assert(!is_call || to_call > 0, "nothing to call");
+  // No raise once you have acted since the last full raise, none when nobody could respond.
+  const others = actor_count(f, a) > 1;
+  assert(!is_raise || (st > to_call && others && !at_b(acted, s)), "raise is not legal");
+  const max_to = (b + st) as Uint<64>;
+  const min_to = min_u(cb == 0 ? BIG_BLIND() : (cb + min_raise) as Uint<64>, max_to);
+  assert(!is_raise || (t <= max_to && (t >= min_to || t == max_to)), "raise outside the legal range");
+  const raise_to = is_raise ? t : b;
+  return is_raise ? (raise_to - b) as Uint<64> : (is_call ? min_u(to_call, st) : 0);
+}
+
+// Applies a legal action's bookkeeping and hands the turn on, closes the street, or ends
+// the deal when one player is left. `out` marks the player folded (kind 0) or all in.
+circuit apply_action(s: Uint<8>, kind: Uint<8>, t: Uint<64>, amount: Uint<64>, out: Boolean, now: Uint<64>): [] {
+  const cb = current_bet;
+  const is_raise = kind == 2;
+  const full_raise = is_raise && ((t - cb) as Uint<64>) >= min_raise;
+  const f = set_b(folded, s, out && kind == 0);
+  const a = set_b(all_in, s, out && kind != 0);
+  const ac = set_b(full_raise ? falses() : acted, s, true);
+  const b = set_u(bet, s, (at_u(bet, s) + amount) as Uint<64>);
+  const nb = is_raise ? t : cb;
+  stack = set_u(stack, s, (at_u(stack, s) - amount) as Uint<64>);
+  bet = b;
+  total = set_u(total, s, (at_u(total, s) + amount) as Uint<64>);
+  folded = f;
+  all_in = a;
+  acted = ac;
+  current_bet = nb;
+  min_raise = full_raise ? (t - cb) as Uint<64> : min_raise;
+
+  if (live_count(f) == 1) {
+    // Everyone else folded: the pot goes to the last player standing.
+    const v = in_deal;
+    const w = fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && !f[k]) ? k : acc), NONE(), seats());
+    stack = set_u(stack, w, (at_u(stack, w) + sum_u(total)) as Uint<64>);
+    phase = Phase.done;
+    to_act = NONE();
+    deadline = 0;
+  } else {
+    if (round_open(f, a, ac, b, nb)) {
+      to_act = next_actor(s, f, a);
+      deadline = (now + ACT_SECONDS()) as Uint<64>;
+    } else {
+      close_street(now, f, a);
+    }
+  }
+}
+
+circuit act_check(s: Uint<8>, now: Uint<64>): [] {
+  assert(phase == Phase.playing, "no betting now");
+  owner_check(s);
+  assert(s == to_act, "not your turn to act");
+  check_now(now);
+}
+
+// Check (0), call (1) or raise to `to` (2), leaving chips behind. An action that would
+// leave you all in must go through act_out, with your board shares.
+export circuit act(seat: Uint<8>, kind: Uint<8>, to: Uint<64>, claimed_now: Uint<64>): [] {
+  const s = disclose(seat);
+  const k = disclose(kind);
+  const t = disclose(to);
+  const now = disclose(claimed_now);
+  act_check(s, now);
+  assert(k != 0 || at_u(bet, s) == current_bet, "there is a bet to call");
+  const amount = action_amount(s, k, t, folded, all_in);
+  assert(at_u(stack, s) > amount, "this leaves you all in: use act_out");
+  apply_action(s, k, t, amount, false, now);
+}
+
+// Fold (0), or a call (1) or raise (2) that puts your whole stack in. Either way you are
+// out of the betting, so your shares for every board position come along: the deal never
+// waits on a player who has nothing left to decide (docs/protocol/dealing.md, Aborts).
+export circuit act_out(seat: Uint<8>, kind: Uint<8>, to: Uint<64>, claimed_now: Uint<64>): [] {
+  const s = disclose(seat);
+  const k = disclose(kind);
+  const t = disclose(to);
+  const now = disclose(claimed_now);
+  act_check(s, now);
+  const amount = action_amount(s, k, t, folded, all_in);
+  assert(k == 0 || at_u(stack, s) == amount, "this leaves chips behind: use act");
+  const x = deck_key();
+  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  const holes = (n_players * 2) as Uint<8>;
+  const d = deck;
+  for (const i of 0..5) {
+    post_share(s, (holes + i) as Uint<8>, x, d);
+  }
+  board_shares.insert(s, 5);
+  apply_action(s, k, t, amount, true, now);
 }
 
 circuit first_without_key(): Uint<8> {
@@ -300,10 +608,19 @@ circuit first_without_holes(): Uint<8> {
   return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && hole_count(k) < need) ? k : acc), NONE(), seats());
 }
 
+circuit first_without_release(): Uint<8> {
+  const v = in_deal;
+  const f = folded;
+  const need = board_len(release_street);
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && !f[k] && board_count(k) < need) ? k : acc), NONE(), seats());
+}
+
 // Anyone may call this once the deadline has passed: the deal aborts and the seat that owed
-// the step is recorded. Bets return and the forfeit is settled by the stakes contract.
+// the step is recorded. Bets return and the forfeit is settled by the stakes contract. A
+// player who lets the betting clock run out has posted no shares, so their deal cannot go
+// on without them: it aborts on them, as docs/protocol/dealing.md, Aborts, case 4.
 export circuit expire(): [] {
-  assert(phase == Phase.keys || phase == Phase.shuffle || phase == Phase.holes, "nothing pending");
+  assert(deadline != 0, "nothing pending");
   assert(blockTimeGte(deadline), "deadline not reached");
   if (phase == Phase.keys) {
     offender = first_without_key();
@@ -311,8 +628,18 @@ export circuit expire(): [] {
     if (phase == Phase.shuffle) {
       offender = turn;
     } else {
-      offender = first_without_holes();
+      if (phase == Phase.holes) {
+        offender = first_without_holes();
+      } else {
+        if (phase == Phase.playing) {
+          offender = to_act;
+        } else {
+          offender = first_without_release();
+        }
+      }
     }
   }
   phase = Phase.aborted;
+  deadline = 0;
+  to_act = NONE();
 }

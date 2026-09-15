@@ -109,7 +109,7 @@ const now = 1_700_000_000;
 // player A's calls are the ones proved.
 let state: Parameters<typeof createCircuitContext>[3] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey))).currentContractState;
 const preimages = new Map<string, Uint8Array>();
-async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares", ...z: (bigint | bigint[])[]) {
+async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release", ...z: (bigint | bigint[])[]) {
   const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS, undefined, undefined, undefined, now);
   const r = await (contract.circuits[circuit] as (c: typeof ctx, ...y: (bigint | bigint[])[]) => Promise<any>)(ctx, ...z);
   state = r.context.callContext.currentQueryContext.state;
@@ -124,7 +124,14 @@ await run(a, "post_key", 0n, BigInt(now));
 await run(b, "post_key", 1n, BigInt(now));
 await run(a, "shuffle", 0n, BigInt(now));
 await run(b, "shuffle", 1n, BigInt(now));
-await run(a, "shares", 0n, [2n, 3n, 3n, 3n, 3n, 3n, 3n, 3n, 3n, 3n]); // the other player's hole positions, padded
+await run(a, "shares", 0n, [2n, 3n, 3n, 3n, 3n, 3n, 3n, 3n, 3n, 3n], BigInt(now)); // the other player's hole positions, padded
+await run(b, "shares", 1n, [0n, 1n, 1n, 1n, 1n, 1n, 1n, 1n, 1n, 1n], BigInt(now));
+await run(a, "act", 0n, 1n, 0n, BigInt(now)); // heads up: the dealer is the small blind and calls
+await run(b, "act", 1n, 0n, 0n, BigInt(now)); // the big blind checks: the flop is to be released
+await run(a, "release", 0n, BigInt(now));
+await run(b, "release", 1n, BigInt(now));
+await run(b, "act", 1n, 0n, 0n, BigInt(now)); // flop: the big blind checks
+await run(a, "act_out", 0n, 2n, 198n, BigInt(now)); // and the dealer shoves, board shares and all
 
 for (const circuit of args.circuits!.split(",")) {
   const k = zkir.Zkir.fromJson(await Bun.file(`${args.zkir}/${circuit}.zkir`).text()).getK();
