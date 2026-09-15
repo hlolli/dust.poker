@@ -2,7 +2,7 @@
 //
 // Phase 0: every player posts a fresh deck key for this deal (post_key).
 // Phase 1: every player, in turn, shuffles and re-encrypts the deck (shuffle).
-// Phase 2+: players post decryption shares for positions they do not hold (share).
+// Phase 2+: players post decryption shares for positions they do not hold (shares).
 //
 // v0 is the benchmark artefact: the cryptographic core with the minimum of table
 // state around it. Seat and deal bookkeeping arrive when this is measured.
@@ -98,12 +98,19 @@ export circuit shuffle(): [] {
   shuffles_done.increment(1);
 }
 
-// Phase 2+. One share for one position, proven against the caller's posted key.
-export circuit share(seat: Uint<8>, pos: Uint<8>): JubjubPoint {
+// Phase 2+. Shares for ten positions in one proof, all against the caller's posted key: the
+// ten hole positions of the other players at the start of a deal, or a street's board
+// positions. For fewer than ten, repeat a position; a duplicate share is the same point and
+// reveals nothing new. Positions are disclosed because the ledger will record who shared what.
+export circuit shares(seat: Uint<8>, positions: Vector<10, Uint<8>>): Vector<10, JubjubPoint> {
   const s = disclose(seat);
+  const ps = disclose(positions);
   const x = deck_key();
   assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
   const d = deck;
-  const c = fold((acc: Locked, k: Uint<8>): Locked => (k == pos ? d[k] : acc), d[0], indices());
-  return disclose(ecMul(c.a, x));
+  const idx = indices();
+  return disclose(map((pos: Uint<8>): JubjubPoint => {
+    const c = fold((acc: Locked, k: Uint<8>): Locked => (k == pos ? d[k] : acc), d[0], idx);
+    return ecMul(c.a, x);
+  }, ps));
 }

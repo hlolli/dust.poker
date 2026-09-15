@@ -49,16 +49,19 @@ function player(permutation: bigint[] = randomPermutation()) {
   return { x, contract };
 }
 
-async function call<C extends "post_key" | "shuffle" | "share">(
+async function call<C extends "post_key" | "shuffle" | "shares">(
   p: ReturnType<typeof player>,
   state: State,
   circuit: C,
-  ...args: bigint[]
+  ...args: (bigint | bigint[])[]
 ): Promise<{ state: State; result: unknown }> {
   const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS);
-  const r = await (p.contract.circuits[circuit] as (c: typeof ctx, ...a: bigint[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...args);
+  const r = await (p.contract.circuits[circuit] as (c: typeof ctx, ...a: (bigint | bigint[])[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...args);
   return { state: r.context.callContext.currentQueryContext.state, result: r.result };
 }
+
+/** Ten positions for the `shares` circuit: fewer are padded by repeating the last one. */
+const ten = (positions: number[]): bigint[] => Array.from({ length: 10 }, (_, i) => BigInt(positions[Math.min(i, positions.length - 1)]!));
 
 const same = (p: JubjubPoint, q: JubjubPoint) => p.x === q.x && p.y === q.y;
 const cardTable = Array.from({ length: 52 }, (_, k) => pureCircuits.card_point(BigInt(k)));
@@ -82,14 +85,18 @@ test("six players deal a deck; each reads only their own cards and the board", a
   const board = [12, 13, 14, 15, 16];
   const shares = new Map<number, Map<number, JubjubPoint>>(); // pos -> seat -> share
 
+  // Two batched calls per player: the other players' hole positions, then the board.
   t = performance.now();
   for (let j = 0; j < SEATS; j++) {
-    const positions = [...board, ...Array.from({ length: SEATS }, (_, i) => i).filter((i) => i !== j).flatMap(holes)];
-    for (const pos of positions) {
-      const r = await call(players[j]!, s, "share", BigInt(j), BigInt(pos));
+    const others = Array.from({ length: SEATS }, (_, i) => i).filter((i) => i !== j).flatMap(holes);
+    for (const positions of [others, board]) {
+      const r = await call(players[j]!, s, "shares", BigInt(j), ten(positions));
       s = r.state;
-      if (!shares.has(pos)) shares.set(pos, new Map());
-      shares.get(pos)!.set(j, r.result as JubjubPoint);
+      (r.result as JubjubPoint[]).forEach((share, i) => {
+        const pos = Number(ten(positions)[i]);
+        if (!shares.has(pos)) shares.set(pos, new Map());
+        shares.get(pos)!.set(j, share);
+      });
     }
   }
   const shareMs = performance.now() - t;
@@ -119,7 +126,7 @@ test("six players deal a deck; each reads only their own cards and the board", a
   // A hole card is unreadable without its holder's key: the wrong key decodes to no card.
   expect(read(0, 1)).toBe(-1);
 
-  console.log(`local dealing: keys ${keysMs.toFixed(0)} ms, 6 shuffles ${shuffleMs.toFixed(0)} ms, 90 shares ${shareMs.toFixed(0)} ms`);
+  console.log(`local dealing: keys ${keysMs.toFixed(0)} ms, 6 shuffles ${shuffleMs.toFixed(0)} ms, 12 share batches ${shareMs.toFixed(0)} ms`);
 }, 120_000);
 
 test("a shuffle that is not a permutation is rejected", async () => {
@@ -136,5 +143,5 @@ test("a share must match the seat's posted key", async () => {
   s = (await call(a, s, "post_key", 0n)).state;
   s = (await call(b, s, "post_key", 1n)).state;
   s = (await call(a, s, "shuffle")).state;
-  await expect(call(a, s, "share", 1n, 3n)).rejects.toThrow(/does not match/);
+  await expect(call(a, s, "shares", 1n, ten([3]))).rejects.toThrow(/does not match/);
 });

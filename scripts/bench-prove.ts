@@ -23,7 +23,7 @@ const { values: args } = parseArgs({
     keys: { type: "string", default: `${root}/contracts/build/deal/keys` },
     zkir: { type: "string", default: `${root}/contracts/build/deal/zkir` },
     params: { type: "string", default: `${root}/.compact/prover/params` },
-    circuits: { type: "string", default: "post_key,share,shuffle" },
+    circuits: { type: "string", default: "post_key,shares,shuffle" },
     // Use the threaded build (scripts/build-prover-mt.sh) with this many rayon threads.
     threads: { type: "string" },
     mt: { type: "string", default: `${root}/.compact/prover-mt` },
@@ -102,9 +102,9 @@ const contract = new Contract<PS>({
 let state: Parameters<typeof createCircuitContext>[3] = (await contract.initialState(createConstructorContext<PS>({}, coinPublicKey)))
   .currentContractState;
 const preimages = new Map<string, Uint8Array>();
-async function run(circuit: "post_key" | "shuffle" | "share", ...a: bigint[]) {
+async function run(circuit: "post_key" | "shuffle" | "shares", ...a: (bigint | bigint[])[]) {
   const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS);
-  const r = await (contract.circuits[circuit] as (c: typeof ctx, ...z: bigint[]) => Promise<any>)(ctx, ...a);
+  const r = await (contract.circuits[circuit] as (c: typeof ctx, ...z: (bigint | bigint[])[]) => Promise<any>)(ctx, ...a);
   state = r.context.callContext.currentQueryContext.state;
   // The root circuit's proof data is the last entry of the call trace (depth-first order).
   const pd = r.context.callProofDataTrace.at(-1)!;
@@ -112,7 +112,7 @@ async function run(circuit: "post_key" | "shuffle" | "share", ...a: bigint[]) {
 }
 await run("post_key", 0n);
 await run("shuffle");
-await run("share", 0n, 3n);
+await run("shares", 0n, [2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n]); // seat 0's hole-card stage: everyone else's positions
 
 for (const circuit of args.circuits!.split(",")) {
   const k = zkir.Zkir.fromJson(await Bun.file(`${args.zkir}/${circuit}.zkir`).text()).getK();
