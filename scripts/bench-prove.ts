@@ -88,7 +88,7 @@ for (let i = 51; i > 0; i--) {
 const x = randomScalar();
 const contract = new Contract<PS>({
   deck_key: (ctx) => [ctx.privateState, x],
-  permutation: (ctx) => [ctx.privateState, permutation],
+  permuted: (ctx) => [ctx.privateState, permutation.map((p) => ctx.ledger.deck[Number(p)]!)],
   blinding: (ctx) => [ctx.privateState, Array.from({ length: 52 }, randomScalar)],
 });
 

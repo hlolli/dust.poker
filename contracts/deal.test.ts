@@ -42,7 +42,8 @@ function player(permutation: bigint[] = randomPermutation()) {
   const blinding = Array.from({ length: 52 }, randomScalar);
   const contract = new Contract<PS>({
     deck_key: (ctx) => [ctx.privateState, x],
-    permutation: (ctx) => [ctx.privateState, permutation],
+    // The circuit takes the deck already in secret order; the permutation itself stays here.
+    permuted: (ctx) => [ctx.privateState, permutation.map((p) => ctx.ledger.deck[Number(p)]!)],
     blinding: (ctx) => [ctx.privateState, blinding],
   });
   return { x, contract };

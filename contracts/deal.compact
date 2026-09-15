@@ -24,7 +24,8 @@ export ledger keys_posted: Counter;
 export ledger shuffles_done: Counter;
 
 witness deck_key(): JubjubScalar;
-witness permutation(): Vector<52, Uint<8>>;
+// The current deck in the shuffler's secret order: permuted()[j] = deck[pi(j)].
+witness permuted(): Vector<52, Locked>;
 witness blinding(): Vector<52, JubjubScalar>;
 
 circuit indices(): Vector<52, Uint<8>> {
@@ -58,25 +59,42 @@ export circuit post_key(seat: Uint<8>): JubjubPoint {
   return p;
 }
 
+// Poseidon step of the running hash over a deck, coordinate by coordinate (the prover does
+// not take points into a hash).
+circuit absorb(acc: Field, c: Locked): Field {
+  return transientHash<Vector<5, Field>>([acc, jubjubPointX(c.a), jubjubPointY(c.a), jubjubPointX(c.b), jubjubPointY(c.b)]);
+}
+
+// A locked card as one field element, for a challenge alpha.
+circuit compress(alpha: Field, c: Locked): Field {
+  return jubjubPointX(c.a) + alpha * (jubjubPointY(c.a) + alpha * (jubjubPointX(c.b) + alpha * jubjubPointY(c.b)));
+}
+
 // Phase 1. The permutation and blinding scalars stay private; only the new deck is public.
+//
+// The permuted deck is a witness, so no dynamic indexing: the circuit proves it is a
+// rearrangement of the ledger deck by a grand product. Compress every card to one field
+// element with a challenge alpha, then check prod (gamma + c(s_j)) == prod (gamma + c(d_k))
+// at a challenge gamma. Both challenges are Poseidon hashes of the witness deck itself
+// (Fiat-Shamir inside the circuit), so the prover fixes the deck before learning them; a
+// non-permutation then passes with probability about 2^-245 per attempt. See
+// docs/protocol/dealing.md, "Cheaper shuffles".
 export circuit shuffle(): [] {
-  const perm = permutation();
+  const s = permuted();
   const r = blinding();
   const pk = joint_key;
   const d = deck;
   const idx = indices();
 
-  // perm is a bijection on 0..51: every card index is hit exactly once.
-  for (const k of idx) {
-    const hits = fold((acc: Uint<8>, j: Uint<8>): Uint<8> => (perm[j] == k ? (acc + 1) as Uint<8> : acc), 0, idx);
-    assert(hits == 1, "not a permutation");
-  }
+  const gamma = fold((acc: Field, k: Uint<8>): Field => absorb(acc, s[k]), 0 as Field, idx);
+  const alpha = transientHash<Vector<2, Field>>([gamma, 1 as Field]);
+  const lhs = fold((acc: Field, k: Uint<8>): Field => acc * (gamma + compress(alpha, s[k])), 1 as Field, idx);
+  const rhs = fold((acc: Field, k: Uint<8>): Field => acc * (gamma + compress(alpha, d[k])), 1 as Field, idx);
+  assert(lhs == rhs, "not a permutation");
 
-  // Output slot j takes input slot perm[j], re-encrypted with fresh randomness.
-  deck = disclose(map((j: Uint<8>): Locked => {
-    const c = fold((acc: Locked, k: Uint<8>): Locked => (perm[j] == k ? d[k] : acc), d[0], idx);
-    return Locked { a: ecAdd(c.a, ecMulGenerator(r[j])), b: ecAdd(c.b, ecMul(pk, r[j])) };
-  }, idx));
+  // Output slot j is s[j] re-encrypted with fresh randomness.
+  deck = disclose(map((j: Uint<8>): Locked =>
+    Locked { a: ecAdd(s[j].a, ecMulGenerator(r[j])), b: ecAdd(s[j].b, ecMul(pk, r[j])) }, idx));
   shuffles_done.increment(1);
 }
 
