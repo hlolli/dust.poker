@@ -1,32 +1,26 @@
 import * as THREE from "three";
+import { brass, marbleBlack } from "./materials.ts";
 import { ROOM } from "./room.ts";
 import { textPlane } from "./text.ts";
 
-/** Neon sign on the far wall and the one door in the menu: the Practice table. */
+/** The hotel's sign on the far wall in gold lettering, and the one door in the menu: the Practice table. */
 export function createSplash(): { group: THREE.Group; practiceDoor: THREE.Mesh } {
   const g = new THREE.Group();
   g.name = "splash";
-  const wallZ = -ROOM.depth / 2 + 0.05;
+  const wallZ = -ROOM.depth / 2 + 0.12;
 
-  const sign = textPlane("dust.poker", { width: 5, color: "#ffd1ec", glow: "#ff2d95" });
-  sign.position.set(0, 2.6, wallZ);
+  // A black marble panel with the name in gold, set under the far arch.
+  const panel = new THREE.Mesh(new THREE.BoxGeometry(5.2, 1.5, 0.12), Object.assign(marbleBlack(1), { color: new THREE.Color(0x151515) }));
+  panel.position.set(0, 5.6, wallZ);
+  g.add(panel);
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(5.4, 1.7, 0.06), brass());
+  frame.position.set(0, 5.6, wallZ - 0.04);
+  g.add(frame);
+  const sign = textPlane("dust.poker", { width: 4.8, color: "#e8c56a", font: "italic 150px Georgia, 'Times New Roman', serif" });
+  sign.position.set(0, 5.6, wallZ + 0.07);
   g.add(sign);
 
-  // Teal neon tube framing the sign.
-  const tube = new THREE.Mesh(
-    new THREE.TorusGeometry(2.4, 0.025, 8, 64, Math.PI),
-    new THREE.MeshStandardMaterial({ color: 0x9ffcf0, emissive: 0x19e6d0, emissiveIntensity: 3 }),
-  );
-  tube.position.set(0, 2.3, wallZ);
-  g.add(tube);
-
-  // One light for the whole sign; the tube's emissive material carries the teal on its own.
-  const pink = new THREE.PointLight(0xff2d95, 25, 8, 2);
-  pink.position.set(0, 2.6, wallZ + 0.6);
-  g.add(pink);
-
   // The door: a brass plaque floating between the player and the table.
-  // Sits below the sightline to the table, like a lectern plaque.
   const practiceDoor = textPlane("PRACTICE TABLE", {
     width: 0.9,
     font: "bold 110px Georgia, serif",
@@ -38,13 +32,10 @@ export function createSplash(): { group: THREE.Group; practiceDoor: THREE.Mesh }
   practiceDoor.name = "practice-door";
   g.add(practiceDoor);
 
-  const frame = new THREE.Mesh(
-    new THREE.BoxGeometry(0.98, 0.3, 0.03),
-    new THREE.MeshStandardMaterial({ color: 0x3a1f0f, roughness: 0.5 }),
-  );
-  frame.position.set(0, 0.95, 2.38); // just behind the plaque
-  frame.rotation.x = -0.25;
-  g.add(frame);
+  const plaqueFrame = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.3, 0.03), brass());
+  plaqueFrame.position.set(0, 0.95, 2.38);
+  plaqueFrame.rotation.x = -0.25;
+  g.add(plaqueFrame);
 
   return { group: g, practiceDoor };
 }

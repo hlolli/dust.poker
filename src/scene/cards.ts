@@ -53,16 +53,26 @@ function material(face: Card | "back"): THREE.MeshLambertMaterial {
   return m;
 }
 
-/** A card lying flat, face up along +y. Call `show()` to change what it shows. */
+/**
+ * A card with two sides: its face on +z and the deck's back pattern on -z, so it reads from
+ * either side (a card held up shows its owner the face and the table the back). Lies flat,
+ * face up along +y, by default. Call `show()` to change what the face shows.
+ */
 export class CardMesh {
-  readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshLambertMaterial>;
+  readonly mesh = new THREE.Group();
+  private readonly front: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshLambertMaterial>;
   constructor() {
-    this.mesh = new THREE.Mesh(geometry, material("back"));
+    this.front = new THREE.Mesh(geometry, material("back"));
+    this.front.position.z = 0.0003;
+    const back = new THREE.Mesh(geometry, material("back"));
+    back.rotation.y = Math.PI;
+    back.position.z = -0.0003;
+    this.mesh.add(this.front, back);
     this.mesh.rotation.x = -Math.PI / 2;
     this.mesh.visible = false;
   }
   show(face: Card | "back" | null) {
     this.mesh.visible = face !== null;
-    if (face) this.mesh.material = material(face);
+    if (face) this.front.material = material(face);
   }
 }

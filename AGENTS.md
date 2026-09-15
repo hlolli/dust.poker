@@ -10,6 +10,8 @@ Layout:
 - `src/scene/` -- Three.js: room, table, seats, rail controls, avatars
 - `src/poker/` -- pure TypeScript poker: cards, hand ranking, payouts, bots; no Three.js, no I/O
 - `src/referee/` -- the `TableState` / `act()` seam and its implementations (practice, live)
+- `src/assets/textures/` -- CC0 PBR sets from ambientCG; `src/assets/avatars/` -- Rocketbox characters converted to GLB; every asset is listed with its licence in `LICENSES.md`, add there when adding assets
+- `scripts/convert-avatar.py` (Blender, headless) converts one Rocketbox FBX folder to a GLB with 1K WebP textures and the 52 ARKit shape keys; `scripts/convert-avatars.sh` runs it over a folder of them. Raw Rocketbox downloads stay out of the repo.
 - `contracts/*.compact` -- the Midnight contracts (the referee); `contracts/build/` is compiler output, not committed
 - `scripts/` -- `fetch-compact.ts` downloads the compiler version pinned in package.json `config.compactc` into `.compact/`; `build-contracts.ts` compiles every contract (`--zk` also builds proving keys)
 - `docs/adr/` decisions, `CONTEXT.md` glossary, `docs/agents/` skill config

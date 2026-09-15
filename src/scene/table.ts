@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { darkWood, velvet } from "./materials.ts";
 
 export const SEAT_COUNT = 6;
 export const TABLE_RADIUS = 1.1;
@@ -21,8 +22,8 @@ export function seatPose(i: number): { position: THREE.Vector3; yaw: number } {
 export function createTable(): THREE.Group {
   const g = new THREE.Group();
   g.name = "table";
-  const felt = new THREE.MeshStandardMaterial({ color: 0x0f5f3f, roughness: 0.95 });
-  const wood = new THREE.MeshStandardMaterial({ color: 0x3a1f0f, roughness: 0.5 });
+  const felt = velvet(0x0f4a34, 4);
+  const wood = darkWood(2);
 
   const top = new THREE.Mesh(new THREE.CylinderGeometry(TABLE_RADIUS, TABLE_RADIUS, 0.06, 64), felt);
   top.position.y = 0.75;
