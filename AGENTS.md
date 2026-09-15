@@ -16,6 +16,8 @@ Layout:
 
 Contracts: `bun run compact:build` before `bun test`; `bun run check` does it. Contract tests live next to the source (`contracts/*.test.ts`) and run the compiled circuits locally through `@midnight-ntwrk/compact-runtime`, no chain, no proof server.
 
+Proving: `bun run prover:build` (needs nix) builds Midnight's wasm prover and the matching native `zkir` key generator into `.compact/prover/`; `bun run compact:build --zk` then generates prover keys into `contracts/build/<name>/keys/`; `bun run bench:prove` proves the dealing circuits and prints times. Never generate keys with the `zkir-v3` binary bundled with compactc; the wasm prover does not read them.
+
 Root holds only files that must be there (package.json, bun.lock, tsconfig.json, vercel.json, LICENSE, README.md, AGENTS.md, CONTEXT.md).
 
 ## Agent skills

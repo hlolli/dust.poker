@@ -12,6 +12,8 @@
     "typecheck": "tsc --noEmit",
     "compact:fetch": "bun scripts/fetch-compact.ts",
     "compact:build": "bun scripts/build-contracts.ts",
+    "prover:build": "scripts/build-prover.sh",
+    "bench:prove": "bun scripts/bench-prove.ts",
     "check": "bun run compact:build && bun run typecheck && bun test && bun run build"
   },
   "dependencies": {
