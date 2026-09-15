@@ -6,6 +6,7 @@ import { attachControls } from "./scene/controls.ts";
 import { Rail } from "./scene/rail.ts";
 import { createRoom } from "./scene/room.ts";
 import { createSplash } from "./scene/splash.ts";
+import { freeze } from "./scene/static.ts";
 import { createTable, EYE_HEIGHT, SEAT_COUNT, seatPose } from "./scene/table.ts";
 import { TableView } from "./scene/table-view.ts";
 
@@ -20,18 +21,26 @@ renderer.xr.enabled = true;
 document.body.append(renderer.domElement, VRButton.createButton(renderer));
 
 const scene = new THREE.Scene();
-scene.add(createRoom(), createTable());
+const room = createRoom();
+const table = createTable();
+scene.add(room, table);
 
+const seats = new THREE.Group();
+seats.name = "seats";
 for (let i = 0; i < SEAT_COUNT; i++) {
   const { position, yaw } = seatPose(i);
   const seat = createSeat(i === YOU ? null : SHIRT_COLORS[i]!); // your own body is not drawn
   seat.position.copy(position);
   seat.rotation.y = yaw;
-  scene.add(seat);
+  seats.add(seat);
 }
+scene.add(seats);
 
 const { group: splash, practiceDoor } = createSplash();
 scene.add(splash);
+
+// Nothing above ever moves: world matrices once, then no per-frame matrix work.
+for (const o of [room, table, seats, splash]) freeze(o);
 
 // The rig is the player's body: it sits at floor level at a pose in the room.
 // The camera is the head, at eye height inside it. XR replaces the head pose.
@@ -56,6 +65,10 @@ onSelect = (hit) => {
   if (hit !== practiceDoor) return;
   controls.unregister(practiceDoor);
   splash.remove(practiceDoor);
+  // GPU resources are not garbage collected; the plaque never comes back.
+  practiceDoor.geometry.dispose();
+  (practiceDoor.material as THREE.MeshBasicMaterial).map?.dispose();
+  (practiceDoor.material as THREE.MeshBasicMaterial).dispose();
   const { position, yaw } = seatPose(YOU);
   moveRigTo(position, yaw, 1800, sitDown);
 };

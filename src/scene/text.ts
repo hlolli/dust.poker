@@ -8,7 +8,7 @@ export type LabelOptions = {
   /** Glow colour; omit for no glow. */
   glow?: string;
   background?: string;
-  /** Canvas size; keep the aspect close to the text you expect. */
+  /** Canvas size, powers of two so mipmaps work; keep the aspect close to the text you expect. */
   canvas?: [number, number];
 };
 
@@ -31,6 +31,13 @@ export class Label {
       new THREE.MeshBasicMaterial({ map: this.texture, transparent: true }),
     );
     this.set(text);
+  }
+
+  /** Frees the GPU texture, geometry and material. The mesh is unusable afterwards. */
+  dispose() {
+    this.texture.dispose();
+    this.mesh.geometry.dispose();
+    this.mesh.material.dispose();
   }
 
   set(text: string, override?: Partial<Pick<LabelOptions, "color" | "background">>) {

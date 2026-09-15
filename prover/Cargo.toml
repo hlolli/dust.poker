@@ -1,0 +1,38 @@
+# Multi-threaded build of Midnight's wasm prover, after midnight-ledger's
+# wasm-proving-demos/zkir-mt: the upstream crate plus a rayon thread pool.
+# Built by scripts/build-prover-mt.sh; the output is not committed.
+[package]
+name = "dust-poker-prover"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rayon = { version = "1", features = ["web_spin_lock"] }
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+zkir = { git = "https://github.com/midnightntwrk/midnight-zkir", package = "midnight-zkir-wasm" }
+wasm-bindgen-rayon = "1.2"
+web-sys = "0.3"
+# getrandom refuses wasm32-unknown-unknown unless told to use the JS backend. Each major
+# in the graph needs the feature here and, for 0.3+, `--cfg getrandom_backend="wasm_js"`
+# in RUSTFLAGS (set by scripts/build-prover-mt.sh).
+getrandom_2 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_3 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+# midnight-zkir's own workspace resolves these unpublished crates from midnight-ledger; a
+# consumer has to repeat the patch. Keep the rev in step with midnight-zkir's Cargo.toml.
+[patch.crates-io]
+midnight-base-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "9a8777c4d035fc7f38ae286bcf5f8656668efd9f" }
+midnight-serialize = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "9a8777c4d035fc7f38ae286bcf5f8656668efd9f" }
+midnight-transient-crypto = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "9a8777c4d035fc7f38ae286bcf5f8656668efd9f" }
+midnight-storage-core = { git = "https://github.com/midnightntwrk/midnight-ledger", rev = "9a8777c4d035fc7f38ae286bcf5f8656668efd9f" }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"

@@ -3,7 +3,7 @@ import type { Action, TableState } from "../referee/types.ts";
 import { seatPose } from "./table.ts";
 import { Label } from "./text.ts";
 
-const BTN = { font: "bold 80px Georgia, serif", canvas: [512, 160] as [number, number], color: "#f6f1e6" };
+const BTN = { font: "bold 72px Georgia, serif", canvas: [512, 128] as [number, number], color: "#f6f1e6" };
 
 /**
  * The player's controls, on the rail in front of their seat: FOLD, CHECK/CALL, RAISE,
@@ -17,7 +17,7 @@ export class Rail {
   private readonly raise = new Label("RAISE", { width: 0.28, background: "#8a6a1c", ...BTN });
   private readonly minus = new Label("-", { width: 0.09, background: "#3a2a18", ...BTN });
   private readonly plus = new Label("+", { width: 0.09, background: "#3a2a18", ...BTN });
-  private readonly amount = new Label("", { width: 0.18, color: "#ffe9b0", font: "bold 80px Georgia, serif", canvas: [512, 160] });
+  private readonly amount = new Label("", { width: 0.18, color: "#ffe9b0", font: "bold 72px Georgia, serif", canvas: [512, 128] });
   private state: TableState | null = null;
   private raiseTo = 0;
 
@@ -27,6 +27,7 @@ export class Rail {
     register: (o: THREE.Object3D) => void,
   ) {
     const { position, yaw } = seatPose(you);
+    this.group.name = "rail";
     this.group.position.copy(position);
     this.group.rotation.y = yaw;
 

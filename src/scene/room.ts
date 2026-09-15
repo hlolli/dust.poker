@@ -4,7 +4,7 @@ export const ROOM = { width: 12, depth: 12, height: 4 };
 
 function carpetTexture(): THREE.Texture {
   const c = document.createElement("canvas");
-  c.width = c.height = 256;
+  c.width = c.height = 256; // power of two: mipmaps work
   const ctx = c.getContext("2d")!;
   ctx.fillStyle = "#4a0f14";
   ctx.fillRect(0, 0, 256, 256);
@@ -28,11 +28,13 @@ function carpetTexture(): THREE.Texture {
   t.colorSpace = THREE.SRGBColorSpace;
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(ROOM.width / 1.5, ROOM.depth / 1.5);
+  t.anisotropy = 8; // the floor is seen at a grazing angle from every seat; three clamps to the GPU max
   return t;
 }
 
 export function createRoom(): THREE.Group {
   const g = new THREE.Group();
+  g.name = "room";
   const { width: w, depth: d, height: h } = ROOM;
 
   const floor = new THREE.Mesh(
@@ -69,26 +71,22 @@ export function createRoom(): THREE.Group {
   ring.rotation.x = Math.PI / 2;
   ring.position.y = 2.7;
   g.add(ring);
+  const bulbGeometry = new THREE.SphereGeometry(0.05, 12, 8);
   const bulb = new THREE.MeshStandardMaterial({ color: 0xffe0a0, emissive: 0xffc060, emissiveIntensity: 2 });
   for (let i = 0; i < 8; i++) {
     const a = (i / 8) * Math.PI * 2;
-    const b = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 8), bulb);
+    const b = new THREE.Mesh(bulbGeometry, bulb);
     b.position.set(Math.cos(a) * 0.6, 2.62, Math.sin(a) * 0.6);
     g.add(b);
   }
+
+  // Lights are per-fragment cost on every standard material, so: one point light for the
+  // chandelier, and a hemisphere light standing in for the sconces and bounce. The neon sign
+  // adds its own single point light.
   const chandelier = new THREE.PointLight(0xffc880, 120, 14, 2);
   chandelier.position.y = 2.6;
   g.add(chandelier);
+  g.add(new THREE.HemisphereLight(0xffd9a8, 0x2a1408, 1.4));
 
-  // Sconces on the side walls, dim and warm.
-  for (const x of [-w / 2 + 0.1, w / 2 - 0.1]) {
-    for (const z of [-3, 3]) {
-      const s = new THREE.PointLight(0xffb070, 30, 9, 2);
-      s.position.set(x, 2.2, z);
-      g.add(s);
-    }
-  }
-
-  g.add(new THREE.AmbientLight(0x503020, 1.0));
   return g;
 }

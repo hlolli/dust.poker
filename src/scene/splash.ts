@@ -5,6 +5,7 @@ import { textPlane } from "./text.ts";
 /** Neon sign on the far wall and the one door in the menu: the Practice table. */
 export function createSplash(): { group: THREE.Group; practiceDoor: THREE.Mesh } {
   const g = new THREE.Group();
+  g.name = "splash";
   const wallZ = -ROOM.depth / 2 + 0.05;
 
   const sign = textPlane("dust.poker", { width: 5, color: "#ffd1ec", glow: "#ff2d95" });
@@ -19,12 +20,10 @@ export function createSplash(): { group: THREE.Group; practiceDoor: THREE.Mesh }
   tube.position.set(0, 2.3, wallZ);
   g.add(tube);
 
+  // One light for the whole sign; the tube's emissive material carries the teal on its own.
   const pink = new THREE.PointLight(0xff2d95, 25, 8, 2);
   pink.position.set(0, 2.6, wallZ + 0.6);
   g.add(pink);
-  const teal = new THREE.PointLight(0x19e6d0, 10, 6, 2);
-  teal.position.set(0, 1.6, wallZ + 0.6);
-  g.add(teal);
 
   // The door: a brass plaque floating between the player and the table.
   // Sits below the sightline to the table, like a lectern plaque.

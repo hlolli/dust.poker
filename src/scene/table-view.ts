@@ -6,6 +6,9 @@ import { Label } from "./text.ts";
 
 const FELT_Y = 0.782;
 const SMALL = { font: "bold 64px Georgia, serif", canvas: [512, 128] as [number, number] };
+// The dealer button, shared by all six seats (only one is visible at a time).
+const buttonGeometry = new THREE.CylinderGeometry(0.025, 0.025, 0.008, 24);
+const buttonMaterial = new THREE.MeshLambertMaterial({ color: 0xf6f1e6 });
 
 /** Renders a TableState onto the table: cards, labels, pot, message. */
 export class TableView {
@@ -19,6 +22,7 @@ export class TableView {
   private readonly message = new Label("", { width: 1.6, color: "#ffd1ec", glow: "#ff2d95", font: "bold 90px Georgia, serif" });
 
   constructor(private readonly you: number) {
+    this.group.name = "table-view";
     const eye = seatPose(you).position.clone().setY(EYE_HEIGHT);
 
     this.board.forEach((c, i) => {
@@ -66,10 +70,7 @@ export class TableView {
       this.group.add(bet.mesh);
       this.betLabels.push(bet);
 
-      const button = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.025, 0.025, 0.008, 24),
-        new THREE.MeshStandardMaterial({ color: 0xf6f1e6 }),
-      );
+      const button = new THREE.Mesh(buttonGeometry, buttonMaterial);
       button.position.copy(position).add(toCentre.clone().multiplyScalar(0.62)).setY(FELT_Y + 0.004);
       button.position.x += Math.cos(yaw) * 0.12;
       button.position.z -= Math.sin(yaw) * 0.12;

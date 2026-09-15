@@ -24,6 +24,9 @@ const { values: args } = parseArgs({
     zkir: { type: "string", default: `${root}/contracts/build/deal/zkir` },
     params: { type: "string", default: `${root}/.compact/prover/params` },
     circuits: { type: "string", default: "post_key,share,shuffle" },
+    // Use the threaded build (scripts/build-prover-mt.sh) with this many rayon threads.
+    threads: { type: "string" },
+    mt: { type: "string", default: `${root}/.compact/prover-mt` },
   },
 });
 
@@ -33,7 +36,16 @@ const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
 
-const zkir = await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`);
+let zkir: any;
+if (args.threads) {
+  // wasm-bindgen `--target web` package: explicit init with the wasm bytes, then the rayon pool.
+  zkir = await import(`${args.mt}/index.js`);
+  await zkir.default({ module_or_path: await Bun.file(`${args.mt}/index_bg.wasm`).bytes() });
+  await zkir.initThreadPool(Number(args.threads));
+  console.log(`threaded prover, ${args.threads} threads`);
+} else {
+  zkir = await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`);
+}
 
 const kmProvider = {
   async lookupKey(keyLocation: string) {

@@ -20,6 +20,7 @@ export function seatPose(i: number): { position: THREE.Vector3; yaw: number } {
 
 export function createTable(): THREE.Group {
   const g = new THREE.Group();
+  g.name = "table";
   const felt = new THREE.MeshStandardMaterial({ color: 0x0f5f3f, roughness: 0.95 });
   const wood = new THREE.MeshStandardMaterial({ color: 0x3a1f0f, roughness: 0.5 });
 
