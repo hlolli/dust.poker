@@ -27,6 +27,9 @@ const { values: args } = parseArgs({
     // Use the threaded build (scripts/build-prover-mt.sh) with this many rayon threads.
     threads: { type: "string" },
     mt: { type: "string", default: `${root}/.compact/prover-mt` },
+    // Prove with the native binary (scripts/build-prover-native.sh) instead of wasm.
+    native: { type: "boolean", default: false },
+    "native-bin": { type: "string", default: `${root}/.compact/prover-native/prove` },
   },
 });
 
@@ -37,7 +40,10 @@ const address = dummyContractAddress();
 type PS = Record<string, never>;
 
 let zkir: any;
-if (args.threads) {
+if (args.native) {
+  // The native binary reads the IR itself; only the k lookup below needs the wasm package.
+  zkir = await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`);
+} else if (args.threads) {
   // wasm-bindgen `--target web` package: explicit init with the wasm bytes, then the rayon pool.
   zkir = await import(`${args.mt}/index.js`);
   await zkir.default({ module_or_path: await Bun.file(`${args.mt}/index_bg.wasm`).bytes() });
@@ -112,6 +118,14 @@ for (const circuit of args.circuits!.split(",")) {
   const k = zkir.Zkir.fromJson(await Bun.file(`${args.zkir}/${circuit}.zkir`).text()).getK();
   const preimage = preimages.get(circuit)!;
   console.log(`\n${circuit}: k=${k} (2^${k} rows), preimage ${preimage.length} bytes`);
+  if (args.native) {
+    const dir = `${root}/.compact/preimages`;
+    await mkdir(dir, { recursive: true });
+    await Bun.write(`${dir}/${circuit}.preimage`, preimage);
+    const p = Bun.spawn([args["native-bin"]!, `${dir}/${circuit}.preimage`, args.keys!, args.zkir!, args.params!, "2"], { stdout: "inherit", stderr: "inherit" });
+    if ((await p.exited) !== 0) throw new Error(`${args["native-bin"]} failed`);
+    continue;
+  }
   const t0 = performance.now();
   const proof: Uint8Array = await zkir.prove(preimage, kmProvider);
   const ms = performance.now() - t0;

@@ -5,7 +5,7 @@
 // from the same source as the wasm prover (scripts/build-prover.sh), not by the zkir-v3
 // binary bundled with compactc: same version string, different key file format.
 import { $ } from "bun";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, renameSync } from "node:fs";
 import pkg from "../package.json";
 
 const root = `${import.meta.dir}/..`;
@@ -24,7 +24,12 @@ for (const f of sources) {
   const name = f.replace(/\.compact$/, "");
   const out = `${root}/contracts/build/${name}`;
   console.log(`compactc ${f} -> contracts/build/${name}`);
+  // compactc empties its output directory; keys cost half a minute and 3 GB to make, so a
+  // plain build keeps the ones it finds. They are stale if the circuits changed: use --zk then.
+  const keep = !zk && existsSync(`${out}/keys`);
+  if (keep) renameSync(`${out}/keys`, `${out}.keys`);
   await $`${compactc} --feature-zkir-v3 --skip-zk ${root}/contracts/${f} ${out}`;
+  if (keep) renameSync(`${out}.keys`, `${out}/keys`);
   if (zk) {
     console.log(`zkir compile-many -> contracts/build/${name}/keys`);
     await $`${prover}/bin/zkir compile-many ${out}/zkir ${out}/keys`.env({ ...process.env, MIDNIGHT_PP: `${prover}/params` });

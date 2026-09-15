@@ -14,3 +14,4 @@ Midnight's prover sees the witnesses, which in this game include a player's deck
 ## Consequences
 
 - Proving time is the browser's single-threaded wasm time until the prover is built with threads: about 2 minutes for the shuffle circuit at k=17 on a laptop (`docs/protocol/dealing.md`, results). Shrinking that is the next piece of work on the protocol.
+- Measured 2026-09-15 (`docs/protocol/dealing.md`, results): threads gain little in wasm (the prover's interpretation phase is single-threaded), the k=16 shuffle proves in 77 s in wasm and 4.4 s natively on the same machine. So the wasm prover is the zero-install default and the only headset option, desktop players get a native prover behind the same interface (`prover/native` grown into a local helper, the Docker proof server, or a wallet's), and the deck of a deal is ready when the slowest prover at the table has shuffled; deadlines follow the prover a player declares.
