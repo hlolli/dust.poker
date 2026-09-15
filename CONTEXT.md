@@ -38,6 +38,10 @@ _Avoid_: Lobby, waiting room, matchmaking
 The chips a seat has at the table, available to wager. Distinct from whatever the player holds in their wallet.
 _Avoid_: Balance, chips (as the general term), bankroll
 
+**Buy-in**:
+Chips a player brings to their stack, when seated or between deals, so that the stack is between 40 and 100 big blinds. Never during a deal the player is in.
+_Avoid_: Re-buy, top-up, reload, add-on
+
 **Bot**:
 A seat filled by an automated opponent following the same rules as a player.
 _Avoid_: AI, NPC, agent

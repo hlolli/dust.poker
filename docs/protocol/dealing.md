@@ -54,7 +54,7 @@ The No-Limit Hold'em rules of `src/poker/deal.ts` are in the contract, once (ADR
 - `act` is a check, call or raise that leaves chips behind. `act_out` is a fold, or a call or raise that puts the whole stack in; it carries the player's shares for all five board positions, so the deal never again waits on a player with nothing left to decide (Aborts, cases 2 and 3). An `act` that would leave a player all in is refused, and so is an `act_out` that would not.
 - When a street's betting closes, the next street's board is **released**: each player still in posts `release`, and betting resumes once all have. If one or no player can still act, hands are tabled first (see Disclosure), then the whole remaining board releases at once; if none can, every share is already there and the deal goes straight to showdown. When everyone else has folded the pot goes to the last player and the deal is done.
 - The betting clock is `ACT_SECONDS` (30) per action, no time bank yet. A player who lets it run out has posted no board shares, so a fold on their behalf is impossible: `expire` aborts the deal on them (Aborts, case 4). Check-else-fold is therefore a client convenience, an automatic `act_out` before the deadline, not a contract rule; ADR 0006 is amended accordingly.
-- Escrow of a real asset (ADR 0007) replaces `sit`'s test chips later.
+- Buy-ins run from 40 to 100 big blinds (80 to 200 chips): `sit` seats a player with the maximum, `buy_in` adds chips up to it while the seat is not in a deal (between deals, or sitting one out after busting). The Practice referee buys a seat back to the maximum once it drops under the minimum, so the table never runs dry. Escrow of a real asset (ADR 0007) replaces these test chips later.
 
 ### Showdown
 

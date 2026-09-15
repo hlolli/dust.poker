@@ -23,7 +23,9 @@ export interface ContractOptions {
 
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle";
+type Circuit = "sit" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle";
+const MIN_BUY_IN = 80;
+const MAX_BUY_IN = 200;
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
 const STREETS: Street[] = ["preflop", "flop", "turn", "river"];
 const BOARD_LEN = [0, 3, 4, 5];
@@ -146,7 +148,7 @@ export class ContractReferee implements Referee {
   private async call(seat: number, circuit: Circuit, ...args: (bigint | bigint[])[]): Promise<unknown> {
     const now = Math.floor(Date.now() / 1000);
     const ctx = createCircuitContext(circuit, address, coinPublicKey, this.state!, {} as PS, undefined, undefined, undefined, now);
-    const all = circuit === "sit" || circuit === "settle" ? args : [...args, BigInt(now)];
+    const all = circuit === "sit" || circuit === "buy_in" || circuit === "settle" ? args : [...args, BigInt(now)];
     const contract = this.seats[seat]!.contract;
     const r = await (contract.circuits[circuit] as (c: typeof ctx, ...a: (bigint | bigint[])[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);
     this.state = r.context.callContext.currentQueryContext.state;
@@ -198,6 +200,13 @@ export class ContractReferee implements Referee {
 
   private async nextDeal() {
     if (this.stopped) return;
+    // Practice chips are free, but results should still show: a seat buys back in to the
+    // maximum only once it has dropped under the minimum buy-in.
+    for (const seat of this.seats) {
+      if (!seat) continue;
+      const stack = Number(this.ledger.stack[seat.index]);
+      if (stack < MIN_BUY_IN) await this.call(seat.index, "buy_in", BigInt(seat.index), BigInt(MAX_BUY_IN - stack));
+    }
     const l = this.ledger;
     this.stackBefore = l.stack.map(Number);
     this.lastAction = this.lastAction.map(() => null);

@@ -2,6 +2,7 @@
 // on top of it. See docs/protocol/dealing.md.
 //
 // One deal at a time (pipelining later). Phases:
+//   sit, buy_in  a seat with the maximum buy-in; more chips between deals, up to it
 //   start_deal   idle, done or aborted -> keys; the players are the seats with chips now;
 //                the dealer button moves, the blinds are posted
 //   post_key     keys -> shuffle once every player has posted
@@ -52,7 +53,10 @@ circuit ACT_SECONDS(): Uint<64> { return 30; }
 circuit CLOCK_SLACK(): Uint<64> { return 120; }
 circuit NONE(): Uint<8> { return 255; }
 circuit BIG_BLIND(): Uint<64> { return 2; }
-circuit BUY_IN(): Uint<64> { return 200; }
+// Buy-in range, 40 to 100 big blinds: a seat sits down with the maximum and may buy in
+// again between deals up to it. Test chips until the escrow of ADR 0007.
+circuit MIN_BUY_IN(): Uint<64> { return 80; }
+circuit MAX_BUY_IN(): Uint<64> { return 200; }
 
 // Seats: seat -> the player's key point. A player's identity is ecMulGenerator(secret):
 // 360 rows, against 3,900 for the SHA-256 identity in seating.compact, which switches to
@@ -265,7 +269,21 @@ export circuit sit(seat: Uint<8>): [] {
   assert(s < 6, "no such seat");
   assert(!seat_owner.member(s), "seat taken");
   seat_owner.insert(s, disclose(me()));
-  stack = set_u(stack, s, BUY_IN());
+  stack = set_u(stack, s, MAX_BUY_IN());
+}
+
+// Buys in again: adds chips to the caller's stack, up to the maximum buy-in, while the seat
+// is not in a deal (between deals, or sitting out one).
+export circuit buy_in(seat: Uint<8>, amount: Uint<64>): [] {
+  const s = disclose(seat);
+  const a = disclose(amount);
+  owner_check(s);
+  const dealing = phase != Phase.idle && phase != Phase.done && phase != Phase.aborted;
+  assert(!dealing || !at_b(in_deal, s), "in a deal");
+  const st = at_u(stack, s);
+  assert(a > 0 && (st + a) as Uint<64> <= MAX_BUY_IN(), "over the maximum buy-in");
+  assert((st + a) as Uint<64> >= MIN_BUY_IN(), "under the minimum buy-in");
+  stack = set_u(stack, s, (st + a) as Uint<64>);
 }
 
 // Anyone may start a deal. The players are whoever is seated with chips; the button moves

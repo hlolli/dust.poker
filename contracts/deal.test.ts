@@ -22,7 +22,7 @@ const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire";
+type Circuit = "sit" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire";
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
 const [FOLD, CHECK, CALL, RAISE] = [0n, 0n, 1n, 2n];
 const NONE = 255n;
@@ -82,7 +82,7 @@ class Table {
 
   /** Circuits that take the clock get it appended. */
   async call(seat: number, circuit: Circuit, ...args: (bigint | bigint[])[]): Promise<unknown> {
-    const timed = circuit !== "sit" && circuit !== "expire" && circuit !== "settle";
+    const timed = circuit !== "sit" && circuit !== "buy_in" && circuit !== "expire" && circuit !== "settle";
     const p = this.players[seat]!;
     const ctx = createCircuitContext(circuit, address, coinPublicKey, this.state, {} as PS, undefined, undefined, undefined, this.now);
     const all = timed ? [...args, BigInt(this.now)] : args;
@@ -479,6 +479,30 @@ test("a player who does not show in time aborts the deal on themselves", async (
   await t.call(1, "expire");
   expect(t.ledger.phase).toBe(Phase.aborted);
   expect(t.ledger.offender).toBe(0n);
+}, 60_000);
+
+test("buying in again: between deals or while sitting out, up to the maximum", async () => {
+  const t = await Table.seated(3);
+  await t.refuses(0, "buy_in", /over the maximum/, 0n, 1n); // already at the maximum
+  await t.dealt();
+  await t.refuses(0, "buy_in", /in a deal/, 0n, 1n);
+  // Seat 0 loses everything and sits out the next deal; it may buy in while that one runs.
+  await t.call(0, "act_out", 0n, RAISE, 200n);
+  await t.call(1, "act_out", 1n, CALL, 0n);
+  await t.call(2, "act_out", 2n, FOLD, 0n);
+  await t.tableAll();
+  await t.showAll();
+  await t.call(0, "settle");
+  const broke = [0, 1].find((i) => t.ledger.stack[i] === 0n)!; // whoever lost the coin flip
+  const rich = 1 - broke;
+  await t.refuses(broke, "buy_in", /not your seat/, BigInt(rich), 10n);
+  await t.refuses(broke, "buy_in", /under the minimum/, BigInt(broke), 79n);
+  await t.refuses(broke, "buy_in", /over the maximum/, BigInt(broke), 201n);
+  await t.call(broke, "buy_in", BigInt(broke), 120n);
+  expect(t.ledger.stack[broke]).toBe(120n);
+  await t.call(broke, "buy_in", BigInt(broke), 80n); // topping up to the maximum
+  expect(t.ledger.stack[broke]).toBe(200n);
+  await t.refuses(rich, "buy_in", /over the maximum/, BigInt(rich), 1n); // 400 behind: no more
 }, 60_000);
 
 test("heads up: the dealer posts the small blind and acts first preflop", async () => {
