@@ -1,5 +1,5 @@
 import { ContractState, createCircuitContext, createConstructorContext, dummyContractAddress } from "@midnight-ntwrk/compact-runtime";
-import { bestFive, cardName, holeCards, openCard, splits } from "../../contracts/client.ts";
+import { bestFive, cardName, holeCards, openCard, shownCards, splits } from "../../contracts/client.ts";
 import { Contract, ledger, type Ledger } from "../../contracts/build/deal/contract/index.js";
 import type { Card } from "../poker/cards.ts";
 import { botAction } from "../poker/bot.ts";
@@ -23,8 +23,8 @@ export interface ContractOptions {
 
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show_hand" | "settle";
-const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, showdown: 6, done: 7, aborted: 8 };
+type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle";
+const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
 const STREETS: Street[] = ["preflop", "flop", "turn", "river"];
 const BOARD_LEN = [0, 3, 4, 5];
 const BIG_BLIND = 2;
@@ -123,6 +123,18 @@ export class ContractReferee implements Referee {
     if (l.phase !== Phase.playing || Number(l.to_act) !== this.you) throw new Error("not your turn");
     await this.perform(this.you, action);
     await this.drive();
+  }
+
+  async show() {
+    if (!this.canShow(this.ledger)) throw new Error("nothing to show");
+    await this.call(this.you, "show", BigInt(this.you));
+    this.publish();
+  }
+
+  /** Once the deal is over, a player dealt in may open their cards, once. */
+  private canShow(l: Ledger): boolean {
+    const over = l.phase === Phase.showdown || l.phase === Phase.done || l.phase === Phase.aborted;
+    return over && !!l.in_deal[this.you] && shownCards(l, this.you) === null;
   }
 
   private get ledger() {
@@ -263,6 +275,12 @@ export class ContractReferee implements Referee {
             }, lo + Math.random() * (hi - lo));
             return;
           }
+          case Phase.tabling:
+            // Nobody can bet any more: every hand still in is shown before the board runs out.
+            this.message = "Hands are tabled";
+            this.publish();
+            for (const s of live) if (shownCards(l, s) === null) await this.call(s, "show", BigInt(s));
+            break;
           case Phase.showdown:
             this.message = "Showdown";
             this.publish();
@@ -325,13 +343,14 @@ export class ContractReferee implements Referee {
         legal: null,
         bigBlind: BIG_BLIND,
         message: "",
+        canShow: false,
       };
     }
     const l = this.ledger;
     const phase = l.phase;
     // A finished deal stays on the table (cards, bets, the winner) until the next one starts.
     const inDeal = phase >= Phase.keys;
-    const betting = phase === Phase.playing || phase === Phase.release || phase === Phase.showdown;
+    const betting = phase >= Phase.playing && phase <= Phase.showdown;
     let mine: Card[] | null = null;
     if (betting || phase === Phase.done) {
       try {
@@ -350,21 +369,24 @@ export class ContractReferee implements Referee {
         board = []; // a release still in progress
       }
     }
+    // Another seat's cards are readable only once that seat has shown them.
+    const shown = (i: number): Card[] | null => (betting || phase === Phase.done || phase === Phase.aborted) && l.in_deal[i] ? (shownCards(l, i)?.map(cardName) ?? null) : null;
     const seats: SeatView[] = this.names.map((name, i) => ({
       name,
       stack: Number(l.stack[i]),
       bet: inDeal ? Number(l.bet[i]) : 0,
-      inHand: inDeal && l.in_deal[i]! && !l.folded[i]!,
+      // A shown hand stays face up on the felt, folded or not.
+      inHand: inDeal && l.in_deal[i]! && (!l.folded[i]! || shown(i) !== null),
       folded: inDeal && l.folded[i]!,
       allIn: inDeal && l.all_in[i]!,
-      hole: i === this.you && l.in_deal[i] ? mine : null,
+      hole: i === this.you ? (l.in_deal[i] ? mine : null) : shown(i),
       lastAction: this.lastAction[i] ?? null,
       isWinner: this.winners.includes(i),
     }));
     return {
       seats,
       dealer: Number(l.dealer) === 255 ? -1 : Number(l.dealer),
-      street: phase === Phase.showdown ? "showdown" : phase === Phase.playing || phase === Phase.release ? STREETS[Number(l.street)]! : "between",
+      street: phase === Phase.showdown ? "showdown" : phase === Phase.playing || phase === Phase.release || phase === Phase.tabling ? STREETS[Number(l.street)]! : "between",
       board,
       pot: l.total.reduce((a, b) => a + Number(b), 0),
       toAct: phase === Phase.playing && l.to_act !== NONE ? Number(l.to_act) : null,
@@ -372,6 +394,7 @@ export class ContractReferee implements Referee {
       legal: phase === Phase.playing && Number(l.to_act) === this.you ? this.legal(this.you) : null,
       bigBlind: BIG_BLIND,
       message: this.message,
+      canShow: this.canShow(l),
     };
   }
 }

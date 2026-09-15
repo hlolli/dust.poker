@@ -11,7 +11,7 @@ import {
 import { evaluate } from "../src/poker/hand.ts";
 import { settle as settleTs } from "../src/poker/payout.ts";
 import { Contract, ledger, pureCircuits } from "./build/deal/contract/index.js";
-import { bestFive, boardCards, cardName, holeCards, splits } from "./client.ts";
+import { bestFive, boardCards, cardName, holeCards, orderOf, shownCards, splits } from "./client.ts";
 
 // Deals executed locally through the referee: seats, phases, turns, deadlines, and the
 // betting of src/poker/deal.test.ts replayed against the contract. No chain, no proofs;
@@ -22,8 +22,8 @@ const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show_hand" | "settle" | "expire";
-const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, showdown: 6, done: 7, aborted: 8 };
+type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire";
+const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
 const [FOLD, CHECK, CALL, RAISE] = [0n, 0n, 1n, 2n];
 const NONE = 255n;
 const T0 = 1_700_000_000; // block time, seconds
@@ -132,6 +132,15 @@ class Table {
       const released = (i: number) => l.board_shares.member(BigInt(i)) && l.board_shares.lookup(BigInt(i)) >= need;
       const s = seatsOf(l).find((i) => !l.folded[i] && !released(i))!;
       await this.call(s, "release", BigInt(s));
+    }
+  }
+
+  /** Hands are being tabled: every player still in shows. */
+  async tableAll() {
+    while (this.ledger.phase === Phase.tabling) {
+      const l = this.ledger;
+      const s = seatsOf(l).find((i) => !l.folded[i] && shownCards(l, i) === null)!;
+      await this.call(s, "show", BigInt(s));
     }
   }
 
@@ -322,11 +331,51 @@ test("all in and called runs the board out to a showdown without waiting on anyo
   expect(t.ledger.all_in[0]).toBe(true);
   await t.call(1, "act_out", 1n, CALL, 0n);
   await t.call(2, "act_out", 2n, CALL, 0n);
-  // Everyone is all in and every board share came with the all-ins: straight to showdown.
+  // Everyone is all in: hands are tabled first, then, every board share having come with
+  // the all-ins, straight to showdown.
+  expect(t.ledger.phase).toBe(Phase.tabling);
+  await t.refuses(0, "show_hand", /not at showdown/, 0n);
+  await t.tableAll();
   expect(t.ledger.phase).toBe(Phase.showdown);
   expect(t.ledger.street).toBe(3n);
   expect(t.ledger.stack.slice(0, 3)).toEqual([0n, 0n, 0n]);
   for (const pos of [6, 7, 8, 9, 10]) for (let seat = 0; seat < 3; seat++) expect(t.ledger.shares_posted.member(BigInt(pos * 8 + seat))).toBe(true);
+  // Everyone's hole cards are readable by anyone now, and they are the cards the holders see.
+  for (let seat = 0; seat < 3; seat++) expect(shownCards(t.ledger, seat)).toEqual(holeCards(t.ledger, seat, t.players[seat]!.x));
+}, 60_000);
+
+test("show your bluff: after a deal anyone dealt in may open their own cards, and nobody else can", async () => {
+  const t = await Table.seated(3);
+  await t.dealt();
+  await t.refuses(0, "show", /nothing to show yet/, 0n);
+  await t.call(0, "act_out", 0n, FOLD, 0n);
+  await t.call(1, "act_out", 1n, FOLD, 0n);
+  expect(t.ledger.phase).toBe(Phase.done);
+  for (let seat = 0; seat < 3; seat++) expect(shownCards(t.ledger, seat)).toBeNull();
+  await t.call(2, "show", 2n); // the winner shows the bluff
+  await t.call(0, "show", 0n); // a folded player may show too
+  expect(shownCards(t.ledger, 2)).toEqual(holeCards(t.ledger, 2, t.players[2]!.x));
+  expect(shownCards(t.ledger, 0)).toEqual(holeCards(t.ledger, 0, t.players[0]!.x));
+  expect(shownCards(t.ledger, 1)).toBeNull();
+  await t.refuses(1, "show", /does not match/, 2n); // only with the seat's own key
+  // The next deal wipes the shares; nothing carries over.
+  await t.call(0, "start_deal");
+  expect(t.ledger.shares_posted.isEmpty()).toBe(true);
+}, 60_000);
+
+test("a player who does not table their hand in time aborts the deal on themselves", async () => {
+  const t = await Table.seated(3);
+  await t.dealt();
+  await t.call(0, "act_out", 0n, RAISE, 200n);
+  await t.call(1, "act_out", 1n, CALL, 0n);
+  await t.call(2, "act_out", 2n, CALL, 0n);
+  expect(t.ledger.phase).toBe(Phase.tabling);
+  await t.call(1, "show", 1n);
+  await t.call(2, "show", 2n);
+  t.now += 60;
+  await t.call(1, "expire");
+  expect(t.ledger.phase).toBe(Phase.aborted);
+  expect(t.ledger.offender).toBe(0n);
 }, 60_000);
 
 test("one player with chips left releases the whole board at once", async () => {
@@ -343,9 +392,13 @@ test("one player with chips left releases the whole board at once", async () => 
   await t.call(1, "act_out", 1n, RAISE, 199n);
   await t.call(2, "act", 2n, CALL, 0n); // covers it with 2 behind
   await t.call(0, "act_out", 0n, FOLD, 0n);
-  // Seat 2 is the only one who can still act, and the only one whose board shares are missing.
+  // Nobody can bet any more: hands are tabled, then seat 2, the only one whose board shares
+  // are missing, releases the whole board.
+  expect(t.ledger.phase).toBe(Phase.tabling);
+  await t.tableAll();
   expect(t.ledger.phase).toBe(Phase.release);
   expect(t.ledger.release_street).toBe(3n);
+  await t.refuses(1, "act", /no betting now/, 1n, CHECK, 0n);
   await t.call(2, "release", 2n);
   expect(t.ledger.phase).toBe(Phase.showdown);
   expect(t.ledger.street).toBe(3n);
@@ -399,6 +452,8 @@ test("showdown with side pots: a short all-in, a covering all-in, and a caller w
   await t.call(0, "act_out", 0n, RAISE, 200n); // all in for 200, a raise of one chip over the top
   await t.call(2, "act", 2n, CALL, 0n); // 200 in, 1 behind: the only one left to act
   expect(t.ledger.total.slice(0, 3)).toEqual([200n, 199n, 200n]);
+  expect(t.ledger.phase).toBe(Phase.tabling);
+  await t.tableAll();
   expect(t.ledger.phase).toBe(Phase.release);
   await t.call(2, "release", 2n);
   expect(t.ledger.phase).toBe(Phase.showdown);
@@ -417,6 +472,7 @@ test("a player who does not show in time aborts the deal on themselves", async (
   await t.dealt();
   await t.call(0, "act_out", 0n, RAISE, 200n);
   await t.call(1, "act_out", 1n, CALL, 0n);
+  await t.tableAll();
   expect(t.ledger.phase).toBe(Phase.showdown);
   await t.call(1, "show_hand", 1n);
   t.now += 90;

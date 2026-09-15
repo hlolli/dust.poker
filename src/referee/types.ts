@@ -31,6 +31,8 @@ export interface TableState {
   bigBlind: number;
   /** One line for the table: who won what, or empty. */
   message: string;
+  /** You may open your own hole cards to the table now (the deal is over and you were dealt in). */
+  canShow: boolean;
 }
 
 export interface SeatView {
@@ -53,4 +55,6 @@ export interface Referee {
   subscribe(fn: (state: TableState) => void): () => void;
   /** May take seconds on a live table; rejects if the action is not legal. */
   act(action: Action): Promise<void>;
+  /** Show your hole cards to the table; rejects unless `canShow`. */
+  show(): Promise<void>;
 }

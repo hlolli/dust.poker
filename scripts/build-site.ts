@@ -1,8 +1,15 @@
 // Builds the static site into dist/ with the wasm shim plugin (the CLI `bun build` takes no
-// plugins). Run `bun run compact:build` first: the referee imports the compiled contract.
+// plugins). The referee imports the compiled contract, so a fresh checkout (Vercel, CI)
+// compiles the contracts first; `bun run check` has already done so.
+import { $ } from "bun";
+import { existsSync } from "node:fs";
 import plugin from "./wasm-plugin.ts";
 
 const root = `${import.meta.dir}/..`;
+if (!existsSync(`${root}/contracts/build/deal/contract/index.js`)) {
+  console.log("compiling the contracts first");
+  await $`bun ${root}/scripts/build-contracts.ts`;
+}
 const result = await Bun.build({
   entrypoints: [`${root}/src/index.html`],
   outdir: `${root}/dist`,

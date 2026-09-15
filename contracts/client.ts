@@ -44,6 +44,16 @@ export function holeCards(l: Ledger, seat: number, x: bigint): [number, number] 
   return [openCard(l, own, { seat, x }), openCard(l, own + 1, { seat, x })];
 }
 
+/** Another seat's hole cards, readable only once that seat has shown; null otherwise. */
+export function shownCards(l: Ledger, seat: number): [number, number] | null {
+  const own = 2 * orderOf(l, seat);
+  try {
+    return [openCard(l, own), openCard(l, own + 1)];
+  } catch {
+    return null;
+  }
+}
+
 export function boardCards(l: Ledger): number[] {
   const holes = 2 * Number(l.n_players);
   return [0, 1, 2, 3, 4].map((i) => openCard(l, holes + i));

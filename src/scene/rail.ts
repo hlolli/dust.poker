@@ -7,8 +7,8 @@ const BTN = { font: "bold 72px Georgia, serif", canvas: [512, 128] as [number, n
 
 /**
  * The player's controls, on the rail in front of their seat: FOLD, CHECK/CALL, RAISE,
- * and a raise amount with - and +. All WebGL; the same meshes answer mouse and XR rays.
- * Keyboard: F, C, R, and arrow keys for the amount.
+ * a raise amount with - and +, and SHOW once a deal is over. All WebGL; the same meshes
+ * answer mouse and XR rays. Keyboard: F, C, R, S, and arrow keys for the amount.
  */
 export class Rail {
   readonly group = new THREE.Group();
@@ -18,12 +18,14 @@ export class Rail {
   private readonly minus = new Label("-", { width: 0.09, background: "#3a2a18", ...BTN });
   private readonly plus = new Label("+", { width: 0.09, background: "#3a2a18", ...BTN });
   private readonly amount = new Label("", { width: 0.18, color: "#ffe9b0", font: "bold 72px Georgia, serif", canvas: [512, 128] });
+  private readonly show = new Label("SHOW", { width: 0.22, background: "#2a3a6e", ...BTN });
   private state: TableState | null = null;
   private raiseTo = 0;
 
   constructor(
     you: number,
     private readonly act: (a: Action) => void,
+    show: () => void,
     register: (o: THREE.Object3D) => void,
   ) {
     const { position, yaw } = seatPose(you);
@@ -43,6 +45,7 @@ export class Rail {
     place(this.minus, 0.19, -0.32, 0.85);
     place(this.amount, 0.33, -0.32, 0.85);
     place(this.plus, 0.47, -0.32, 0.85);
+    place(this.show, -0.32, -0.32, 0.85);
 
     const handlers = new Map<THREE.Object3D, () => void>([
       [this.fold.mesh, () => this.state?.legal && act({ type: "fold" })],
@@ -50,11 +53,13 @@ export class Rail {
       [this.raise.mesh, () => this.state?.legal?.raise && act({ type: "raise", to: this.raiseTo })],
       [this.minus.mesh, () => this.step(-1)],
       [this.plus.mesh, () => this.step(1)],
+      [this.show.mesh, () => this.state?.canShow && show()],
     ]);
     for (const m of handlers.keys()) register(m);
     this.onSelect = (o) => handlers.get(o)?.();
 
     window.addEventListener("keydown", (e) => {
+      if (e.key === "s" || e.key === "S") return handlers.get(this.show.mesh)!();
       if (!this.state?.legal) return;
       if (e.key === "f" || e.key === "F") handlers.get(this.fold.mesh)!();
       else if (e.key === "c" || e.key === "C") handlers.get(this.call.mesh)!();
@@ -89,6 +94,7 @@ export class Rail {
     for (const l of [this.fold, this.call, this.raise, this.minus, this.plus, this.amount]) {
       l.mesh.material.opacity = on ? 1 : 0.35;
     }
+    this.show.mesh.visible = !!this.state?.canShow;
     if (!legal) return;
     this.call.set(legal.check ? "CHECK" : `CALL ${legal.call}`);
     const r = legal.raise;

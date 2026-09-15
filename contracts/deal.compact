@@ -13,6 +13,9 @@
 //   act          check, call or raise that leaves chips behind
 //   act_out      fold, or a call or raise that leaves the player all in; carries the
 //                player's shares for every board position, so the deal never waits on them
+//   show         a player's shares for their own two hole cards, which makes them readable
+//                to the table: by choice once a deal is over, or required of everyone still
+//                in when nobody can bet any more and the board has yet to run out (tabling)
 //   show_hand    at showdown, each player still in proves the rank of their best hand from
 //                their locked cards and the board, cards unseen; the score is recorded
 //   settle       anyone, once every score is in: pays the pot, side pots included, from a
@@ -29,7 +32,7 @@
 
 import CompactStandardLibrary;
 
-enum Phase { idle, keys, shuffle, holes, playing, release, showdown, done, aborted }
+enum Phase { idle, keys, shuffle, holes, playing, release, tabling, showdown, done, aborted }
 
 struct Locked {
   a: JubjubPoint,
@@ -43,6 +46,7 @@ circuit SHUFFLE_SECONDS(): Uint<64> { return 240; }
 circuit HOLES_SECONDS(): Uint<64> { return 90; }
 circuit RELEASE_SECONDS(): Uint<64> { return 90; }
 circuit SHOWDOWN_SECONDS(): Uint<64> { return 90; }
+circuit TABLING_SECONDS(): Uint<64> { return 60; }
 // The betting clock. ponytail: no time bank yet; add one per deal when the client has a clock.
 circuit ACT_SECONDS(): Uint<64> { return 30; }
 circuit CLOCK_SLACK(): Uint<64> { return 120; }
@@ -405,19 +409,35 @@ circuit released(f: Vector<6, Boolean>, rs: Uint<8>): Boolean {
   return fold((acc: Boolean, k: Uint<8>): Boolean => (acc && (!v[k] || f[k] || board_count(k) >= need)), true, seats());
 }
 
-// A street's betting is over: on to the next release, or to showdown after the river.
+// A street's betting is over: to showdown after the river; to tabling when nobody can bet
+// any more (hands are shown before the board runs out, as at a live table); otherwise to
+// the next street's release.
 circuit close_street(now: Uint<64>, f: Vector<6, Boolean>, a: Vector<6, Boolean>): [] {
   to_act = NONE();
-  // With one or no player left to act, the whole board runs out in one release.
-  const rs = actor_count(f, a) <= 1 ? 3 : (street + 1) as Uint<8>;
-  if (street == 3 || released(f, rs)) {
-    // After the river, or when everyone still in is all in and has already posted every
-    // board share: nothing to wait for.
+  if (street == 3) {
+    phase = Phase.showdown;
+    deadline = (now + SHOWDOWN_SECONDS()) as Uint<64>;
+  } else {
+    if (actor_count(f, a) <= 1) {
+      phase = Phase.tabling;
+      deadline = (now + TABLING_SECONDS()) as Uint<64>;
+    } else {
+      release_street = (street + 1) as Uint<8>;
+      phase = Phase.release;
+      deadline = (now + RELEASE_SECONDS()) as Uint<64>;
+    }
+  }
+}
+
+// Hands tabled: the rest of the board runs out in one release, or straight to showdown when
+// every share is already there (everyone all in posted them with their all-ins).
+circuit run_out(now: Uint<64>): [] {
+  if (released(folded, 3)) {
     street = 3;
     phase = Phase.showdown;
     deadline = (now + SHOWDOWN_SECONDS()) as Uint<64>;
   } else {
-    release_street = rs;
+    release_street = 3;
     phase = Phase.release;
     deadline = (now + RELEASE_SECONDS()) as Uint<64>;
   }
@@ -612,11 +632,50 @@ export circuit act_out(seat: Uint<8>, kind: Uint<8>, to: Uint<64>, claimed_now: 
   apply_action(s, k, t, amount, true, now);
 }
 
-// ---- Showdown ----------------------------------------------------------------------------
+// ---- Show ---------------------------------------------------------------------------------
 
 circuit share_key(pos: Uint<8>, s: Uint<8>): Uint<16> {
   return ((pos as Uint<16>) * 8 + (s as Uint<16>)) as Uint<16>;
 }
+
+// Seat k has posted the shares for its own hole cards, so the table can read them.
+circuit has_shown(k: Uint<8>): Boolean {
+  return shares_posted.member(share_key((order_of(k) * 2) as Uint<8>, k));
+}
+
+circuit all_tabled(f: Vector<6, Boolean>): Boolean {
+  const v = in_deal;
+  return fold((acc: Boolean, k: Uint<8>): Boolean => (acc && (!v[k] || f[k] || has_shown(k))), true, seats());
+}
+
+// Makes the caller's hole cards readable to the table: their own shares for their two
+// positions, the only ones missing. By choice once the deal is over (won, lost or folded,
+// "show your bluff"), or required of every player still in while hands are being tabled.
+export circuit show(seat: Uint<8>, claimed_now: Uint<64>): [] {
+  assert(phase == Phase.tabling || phase == Phase.showdown || phase == Phase.done || phase == Phase.aborted, "nothing to show yet");
+  const s = disclose(seat);
+  assert(at_b(in_deal, s), "not in this deal");
+  const x = deck_key();
+  assert(keys.member(s), "seat has no deck key");
+  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  const now = disclose(claimed_now);
+  check_now(now);
+  const own = (order_of(s) * 2) as Uint<8>;
+  const d = deck;
+  post_share(s, own, x, d);
+  post_share(s, (own + 1) as Uint<8>, x, d);
+  if (phase == Phase.tabling && all_tabled(folded)) {
+    run_out(now);
+  }
+}
+
+circuit first_without_show(): Uint<8> {
+  const v = in_deal;
+  const f = folded;
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && !f[k] && !has_shown(k)) ? k : acc), NONE(), seats());
+}
+
+// ---- Showdown ----------------------------------------------------------------------------
 
 // The card index behind a decrypted point: the fresh deck's plaintexts are the 52 card
 // points, so 52 comparisons find it. NONE if it is not a card.
@@ -841,7 +900,11 @@ export circuit expire(): [] {
           if (phase == Phase.release) {
             offender = first_without_release();
           } else {
-            offender = first_without_score();
+            if (phase == Phase.tabling) {
+              offender = first_without_show();
+            } else {
+              offender = first_without_score();
+            }
           }
         }
       }

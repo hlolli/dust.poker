@@ -97,7 +97,7 @@ The moment every player still in the deal has posted their shares for a street's
 _Avoid_: Reveal, flip
 
 **Show**:
-A player's choice to make their own hole cards readable to the table after a deal, whether they won, lost or folded. Nothing else ever makes a hole card readable.
+A player making their own hole cards readable to the table: by choice after a deal, whether they won, lost or folded, or as the rules require of everyone still in when nobody can bet any more and the board has yet to run out. Nothing else ever makes a hole card readable.
 _Avoid_: Reveal, expose, table (as a verb)
 
 **Bond**:

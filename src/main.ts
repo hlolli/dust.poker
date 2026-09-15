@@ -147,7 +147,7 @@ async function sitDown() {
   const { ContractReferee } = await import("./referee/contract.ts");
   const referee = new ContractReferee({ names, you: YOU });
   const view = new TableView(YOU);
-  const rail = new Rail(YOU, (a) => referee.act(a).catch(console.warn), controls.register);
+  const rail = new Rail(YOU, (a) => referee.act(a).catch(console.warn), () => referee.show().catch(console.warn), controls.register);
   scene.add(view.group, rail.group);
   attachCards = (seat, avatar) => view.attachHoleCards(seat, cardAnchor(avatar));
   avatars.forEach((a, i) => a && attachCards!(i, a));
@@ -155,7 +155,9 @@ async function sitDown() {
   referee.subscribe((s) => {
     view.update(s);
     rail.update(s);
+    (window as unknown as Record<string, unknown>).__table = s; // inspection handle, like __scene
   });
+  Object.assign(window as unknown as Record<string, unknown>, { __referee: referee });
   referee.start().catch(console.error);
 }
 
