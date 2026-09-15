@@ -1,7 +1,16 @@
 import type { Card } from "../poker/cards.ts";
-import type { Action, Legal, Street } from "../poker/deal.ts";
 
-export type { Action, Legal };
+export type Street = "preflop" | "flop" | "turn" | "river";
+
+export type Action = { type: "fold" } | { type: "check" } | { type: "call" } | { type: "raise"; to: number };
+
+export interface Legal {
+  check: boolean;
+  /** Chips needed to call; 0 when checking is legal. */
+  call: number;
+  /** Raise "to" amounts for this street, all-in included; null when no raise is possible. */
+  raise: { min: number; max: number } | null;
+}
 
 /**
  * Everything the scene may know. Never the deck, never another seat's hole cards

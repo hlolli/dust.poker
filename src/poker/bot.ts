@@ -1,4 +1,4 @@
-import type { Action, Legal } from "./deal.ts";
+import type { Action, Legal } from "../referee/types.ts";
 
 // ponytail: weighted-random legal actions with a fold bias when facing a bet.
 // Card-aware bots come when losing to these stops being funny.

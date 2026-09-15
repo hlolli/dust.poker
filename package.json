@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "bun src/index.html",
-    "build": "bun build src/index.html --outdir dist --minify",
+    "build": "bun scripts/build-site.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "compact:fetch": "bun scripts/fetch-compact.ts",

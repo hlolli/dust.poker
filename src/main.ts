@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
-import { PracticeReferee } from "./referee/practice.ts";
+import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
 import { createSeat } from "./scene/avatar.ts";
 import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseSeated, poseStanding } from "./scene/avatars.ts";
 import { BARTENDER_POSE, createBar } from "./scene/bar.ts";
@@ -138,11 +138,14 @@ onSelect = (hit) => {
 };
 controls.register(practiceDoor);
 
-function sitDown() {
+async function sitDown() {
   camera.position.copy(seatedEye);
   camera.rotation.x = -0.35; // look at the felt
   const names = Array.from({ length: SEAT_COUNT }, (_, i) => (i === YOU ? "You" : BOT_NAMES[i - 1]!));
-  const referee = new PracticeReferee({ names, you: YOU });
+  // The referee is the compiled contract; its runtime's wasm must be up before it is imported.
+  await runtimeReady;
+  const { ContractReferee } = await import("./referee/contract.ts");
+  const referee = new ContractReferee({ names, you: YOU });
   const view = new TableView(YOU);
   const rail = new Rail(YOU, (a) => referee.act(a).catch(console.warn), controls.register);
   scene.add(view.group, rail.group);
@@ -153,7 +156,7 @@ function sitDown() {
     view.update(s);
     rail.update(s);
   });
-  referee.start();
+  referee.start().catch(console.error);
 }
 
 // Checked every frame rather than on the resize event: embedded browsers and XR
