@@ -15,6 +15,7 @@ import {
   proofDataIntoSerializedPreimage,
 } from "@midnight-ntwrk/compact-runtime";
 import { Contract } from "../contracts/build/deal/contract/index.js";
+import { bestFive, splits } from "../contracts/client.ts";
 
 const root = `${import.meta.dir}/..`;
 const { values: args } = parseArgs({
@@ -92,7 +93,7 @@ for (let i = 51; i > 0; i--) {
   [permutation[i], permutation[j]] = [permutation[j]!, permutation[i]!];
 }
 // Two players share the ledger; each has an identity, a deck key and a shuffle of their own.
-const contractFor = () => {
+const contractFor = (seat: number) => {
   const secret = randomScalar();
   const x = randomScalar();
   return new Contract<PS>({
@@ -100,16 +101,19 @@ const contractFor = () => {
     deck_key: (ctx) => [ctx.privateState, x],
     permuted: (ctx) => [ctx.privateState, permutation.map((p) => ctx.ledger.deck[Number(p)]!)],
     blinding: (ctx) => [ctx.privateState, Array.from({ length: 52 }, randomScalar)],
+    best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, seat, x)],
+    split_share: (ctx) => [ctx.privateState, splits(ctx.ledger).share],
+    split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
   });
 };
-const [a, b] = [contractFor(), contractFor()];
+const [a, b] = [contractFor(0), contractFor(1)];
 const now = 1_700_000_000;
 
 // Run the circuits locally to get the proof preimages, in the order a deal takes them;
 // player A's calls are the ones proved.
 let state: Parameters<typeof createCircuitContext>[3] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey))).currentContractState;
 const preimages = new Map<string, Uint8Array>();
-async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release", ...z: (bigint | bigint[])[]) {
+async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release" | "show_hand" | "settle", ...z: (bigint | bigint[])[]) {
   const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS, undefined, undefined, undefined, now);
   const r = await (contract.circuits[circuit] as (c: typeof ctx, ...y: (bigint | bigint[])[]) => Promise<any>)(ctx, ...z);
   state = r.context.callContext.currentQueryContext.state;
@@ -132,6 +136,10 @@ await run(a, "release", 0n, BigInt(now));
 await run(b, "release", 1n, BigInt(now));
 await run(b, "act", 1n, 0n, 0n, BigInt(now)); // flop: the big blind checks
 await run(a, "act_out", 0n, 2n, 198n, BigInt(now)); // and the dealer shoves, board shares and all
+await run(b, "act_out", 1n, 1n, 0n, BigInt(now)); // called: both all in, straight to showdown
+await run(a, "show_hand", 0n, BigInt(now));
+await run(b, "show_hand", 1n, BigInt(now));
+await run(a, "settle");
 
 for (const circuit of args.circuits!.split(",")) {
   const k = zkir.Zkir.fromJson(await Bun.file(`${args.zkir}/${circuit}.zkir`).text()).getK();

@@ -13,11 +13,14 @@
 //   act          check, call or raise that leaves chips behind
 //   act_out      fold, or a call or raise that leaves the player all in; carries the
 //                player's shares for every board position, so the deal never waits on them
+//   show_hand    at showdown, each player still in proves the rank of their best hand from
+//                their locked cards and the board, cards unseen; the score is recorded
+//   settle       anyone, once every score is in: pays the pot, side pots included, from a
+//                witnessed split that the circuit checks (no division in Compact) -> done
 //   expire       anyone, once the deadline has passed -> aborted, the seat that owed the
 //                step is recorded for the stakes contract to settle
 //   A street whose betting closes moves to release (or showdown after the river); a deal
-//   that folds down to one player pays them and is done. Showdown settlement is the next
-//   piece of work; a deal in showdown waits there.
+//   that folds down to one player pays them and is done.
 //
 // Deadlines are block time in seconds. A caller states `now`; the contract checks it against
 // the block (blockTimeGte, blockTimeLt) to within CLOCK_SLACK and sets the next deadline
@@ -39,6 +42,7 @@ circuit KEYS_SECONDS(): Uint<64> { return 60; }
 circuit SHUFFLE_SECONDS(): Uint<64> { return 240; }
 circuit HOLES_SECONDS(): Uint<64> { return 90; }
 circuit RELEASE_SECONDS(): Uint<64> { return 90; }
+circuit SHOWDOWN_SECONDS(): Uint<64> { return 90; }
 // The betting clock. ponytail: no time bank yet; add one per deal when the client has a clock.
 circuit ACT_SECONDS(): Uint<64> { return 30; }
 circuit CLOCK_SLACK(): Uint<64> { return 120; }
@@ -92,12 +96,21 @@ export ledger holes_done: Counter;
 // seat -> distinct board positions it has shared (the board releases in order, so this is
 // how far the seat has released)
 export ledger board_shares: Map<Uint<8>, Uint<8>>;
+// Showdown: seat -> proven hand score (see score5), and how many have proven.
+export ledger scores: Map<Uint<8>, Uint<64>>;
+export ledger shown: Counter;
 
 witness player_secret(): JubjubScalar;
 witness deck_key(): JubjubScalar;
 // The current deck in the shuffler's secret order: permuted()[j] = deck[pi(j)].
 witness permuted(): Vector<52, Locked>;
 witness blinding(): Vector<52, JubjubScalar>;
+// Showdown: which five of the seven cards (0, 1 the hole cards, 2..6 the board) make the hand.
+witness best_five(): Vector<5, Uint<8>>;
+// Settlement: for each seat taken as a pot level, the equal share and the odd chips of that
+// level's pot among its winners (slice == share * winners + odd, odd < winners).
+witness split_share(): Vector<6, Uint<64>>;
+witness split_odd(): Vector<6, Uint<64>>;
 
 circuit indices(): Vector<52, Uint<8>> {
   return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -273,6 +286,8 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
   hole_shares.resetToDefault();
   holes_done.resetToDefault();
   board_shares.resetToDefault();
+  scores.resetToDefault();
+  shown.resetToDefault();
   offender = NONE();
 
   // Button and blinds. Heads up, the dealer is the small blind and acts first preflop.
@@ -400,7 +415,7 @@ circuit close_street(now: Uint<64>, f: Vector<6, Boolean>, a: Vector<6, Boolean>
     // board share: nothing to wait for.
     street = 3;
     phase = Phase.showdown;
-    deadline = 0;
+    deadline = (now + SHOWDOWN_SECONDS()) as Uint<64>;
   } else {
     release_street = rs;
     phase = Phase.release;
@@ -597,6 +612,195 @@ export circuit act_out(seat: Uint<8>, kind: Uint<8>, to: Uint<64>, claimed_now: 
   apply_action(s, k, t, amount, true, now);
 }
 
+// ---- Showdown ----------------------------------------------------------------------------
+
+circuit share_key(pos: Uint<8>, s: Uint<8>): Uint<16> {
+  return ((pos as Uint<16>) * 8 + (s as Uint<16>)) as Uint<16>;
+}
+
+// The card index behind a decrypted point: the fresh deck's plaintexts are the 52 card
+// points, so 52 comparisons find it. NONE if it is not a card.
+circuit card_index(m: JubjubPoint, fr: Vector<52, Locked>): Uint<8> {
+  const k = fold((acc: Uint<8>, i: Uint<8>): Uint<8> => (fr[i].b == m ? i : acc), NONE(), indices());
+  assert(k != NONE(), "not a card");
+  return k;
+}
+
+// A card of the current deck opened with every posted share for it, and the reader's own
+// key when the card is theirs (own == true; the reader never posts a share for it).
+circuit open_card(pos: Uint<8>, reader: Uint<8>, own: Boolean, x: JubjubScalar, d: Vector<52, Locked>, fr: Vector<52, Locked>): Uint<8> {
+  const v = in_deal;
+  const c = fold((acc: Locked, k: Uint<8>): Locked => (k == pos ? d[k] : acc), d[0], indices());
+  const others = fold((acc: JubjubPoint, j: Uint<8>): JubjubPoint =>
+    ((v[j] && !(own && j == reader)) ? ecAdd(acc, shares_posted.lookup(share_key(pos, j))) : acc), identity(), seats());
+  const mine = own ? ecMul(c.a, x) : identity();
+  return card_index(ecAdd(c.b, ecNeg(ecAdd(others, mine))), fr);
+}
+
+// Card index k (0..51) is suit * 13 + rank, suits c d h s, ranks 2..A: value 2..14.
+circuit suit_of(k: Uint<8>): Uint<8> {
+  return k >= 39 ? 3 : (k >= 26 ? 2 : (k >= 13 ? 1 : 0));
+}
+
+circuit value_of(k: Uint<8>): Uint<8> {
+  return (k - suit_of(k) * 13 + 2) as Uint<8>;
+}
+
+circuit hi(a: Uint<8>, b: Uint<8>): Uint<8> { return a > b ? a : b; }
+circuit lo(a: Uint<8>, b: Uint<8>): Uint<8> { return a > b ? b : a; }
+
+// The score of five cards, as src/poker/hand.ts computes it: category then five tiebreak
+// digits, base 15. Higher wins, equal chops.
+circuit score5(vals: Vector<5, Uint<8>>, suits: Vector<5, Uint<8>>): Uint<64> {
+  // Sort descending: a nine-comparator network for five elements.
+  const a0 = hi(vals[0], vals[1]); const a1 = lo(vals[0], vals[1]);
+  const a3 = hi(vals[3], vals[4]); const a4 = lo(vals[3], vals[4]);
+  const b2 = hi(vals[2], a4); const b4 = lo(vals[2], a4);
+  const c2 = hi(b2, a3); const c3 = lo(b2, a3);
+  const d0 = hi(a0, c3); const d3 = lo(a0, c3);
+  const e0 = hi(d0, c2); const e2 = lo(d0, c2);
+  const f1 = hi(a1, b4); const f4 = lo(a1, b4);
+  const g1 = hi(f1, d3); const g3 = lo(f1, d3);
+  const v0 = e0; const v1 = hi(g1, e2); const v2 = lo(g1, e2); const v3 = g3; const v4 = f4;
+
+  const flush = suits[0] == suits[1] && suits[1] == suits[2] && suits[2] == suits[3] && suits[3] == suits[4];
+  const e01 = v0 == v1; const e12 = v1 == v2; const e23 = v2 == v3; const e34 = v3 == v4;
+  const distinct = !e01 && !e12 && !e23 && !e34;
+  const straight_high = distinct && (v0 - v4) == 4 ? v0 : ((distinct && v0 == 14 && v1 == 5 && v4 == 2) ? 5 : 0);
+  const quads = (e01 && e12 && e23) || (e12 && e23 && e34);
+  const full = (e01 && e12 && e34) || (e01 && e23 && e34);
+  const trips = e12 && (e01 || e23) || (e23 && e34);
+  const two_pair = (e01 && e23) || (e01 && e34) || (e12 && e34);
+  const pair = e01 || e12 || e23 || e34;
+
+  const cat = (straight_high != 0 && flush) ? 8 : (quads ? 7 : (full ? 6 : (flush ? 5 : (straight_high != 0 ? 4 : (trips ? 3 : (two_pair ? 2 : (pair ? 1 : 0)))))));
+  // Tiebreak digits by category, as hand.ts orders them: groups by count then rank, then kickers.
+  const quad_k = (e01 && e12 && e23) ? v4 : v0;
+  const full_t = (e01 && e12) ? v0 : v2;
+  const full_p = (e01 && e12) ? v3 : v0;
+  const trips_k1 = (e01 && e12) ? v3 : v0;
+  const trips_k2 = (e23 && e34) ? v1 : v4;
+  const tp_k = (e01 && e23) ? v4 : ((e01 && e34) ? v2 : v0);
+  const pair_r = e01 ? v0 : (e12 ? v1 : (e23 ? v2 : v3));
+  const pair_k1 = e01 ? v2 : v0;
+  const pair_k2 = (e01 || e12) ? v3 : v1;
+  const pair_k3 = e34 ? v2 : v4;
+  const t0 = cat == 8 ? straight_high : (cat == 7 ? v1 : (cat == 6 ? full_t : (cat == 5 ? v0 : (cat == 4 ? straight_high : (cat == 3 ? v2 : (cat == 2 ? v1 : (cat == 1 ? pair_r : v0)))))));
+  const t1 = cat == 7 ? quad_k : (cat == 6 ? full_p : (cat == 5 ? v1 : (cat == 3 ? trips_k1 : (cat == 2 ? v3 : (cat == 1 ? pair_k1 : (cat == 0 ? v1 : 0))))));
+  const t2 = cat == 5 ? v2 : (cat == 3 ? trips_k2 : (cat == 2 ? tp_k : (cat == 1 ? pair_k2 : (cat == 0 ? v2 : 0))));
+  const t3 = cat == 5 ? v3 : (cat == 1 ? pair_k3 : (cat == 0 ? v3 : 0));
+  const t4 = (cat == 5 || cat == 0) ? v4 : 0;
+  const s0 = ((cat as Uint<64>) * 15 + t0) as Uint<64>;
+  const s1 = (s0 * 15 + t1) as Uint<64>;
+  const s2 = (s1 * 15 + t2) as Uint<64>;
+  const s3 = (s2 * 15 + t3) as Uint<64>;
+  return (s3 * 15 + t4) as Uint<64>;
+}
+
+// At showdown, a player still in proves the rank of their hand: the two hole cards opened
+// with their deck key and the others' shares, the board with everyone's shares, five of the
+// seven chosen as a witness, scored in the circuit. Only the score is disclosed: it says
+// how strong the hand is, never which cards or suits made it.
+export circuit show_hand(seat: Uint<8>, claimed_now: Uint<64>): Uint<64> {
+  assert(phase == Phase.showdown, "not at showdown");
+  const s = disclose(seat);
+  assert(at_b(in_deal, s) && !at_b(folded, s), "not in the showdown");
+  assert(!scores.member(s), "already shown");
+  const x = deck_key();
+  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  const now = disclose(claimed_now);
+  check_now(now);
+  const d = deck;
+  const fr = fresh;
+  const own = (order_of(s) * 2) as Uint<8>;
+  const holes = (n_players * 2) as Uint<8>;
+  const cards: Vector<7, Uint<8>> = [
+    open_card(own, s, true, x, d, fr),
+    open_card((own + 1) as Uint<8>, s, true, x, d, fr),
+    open_card(holes, s, false, x, d, fr),
+    open_card((holes + 1) as Uint<8>, s, false, x, d, fr),
+    open_card((holes + 2) as Uint<8>, s, false, x, d, fr),
+    open_card((holes + 3) as Uint<8>, s, false, x, d, fr),
+    open_card((holes + 4) as Uint<8>, s, false, x, d, fr),
+  ];
+  const pick = best_five();
+  for (const i of 0..5) {
+    assert(pick[i] < 7, "no such card");
+    for (const j of 0..5) {
+      assert(i == j || pick[i] != pick[j], "a card used twice");
+    }
+  }
+  const five = map((slot: Uint<8>): Uint<8> =>
+    fold((acc: Uint<8>, i: Uint<8>): Uint<8> => (i == slot ? cards[i] : acc), 0 as Uint<8>, [0, 1, 2, 3, 4, 5, 6]), pick);
+  const score = score5(map((k: Uint<8>): Uint<8> => value_of(k), five), map((k: Uint<8>): Uint<8> => suit_of(k), five));
+  scores.insert(s, disclose(score));
+  shown.increment(1);
+  return disclose(score);
+}
+
+circuit min64(a: Uint<64>, b: Uint<64>): Uint<64> {
+  return a < b ? a : b;
+}
+
+// Seats clockwise from the dealer's left: 0 for the dealer's left, 5 for the dealer.
+circuit from_dealer(i: Uint<8>): Uint<8> {
+  const dl = dealer;
+  return i > dl ? (i - dl - 1) as Uint<8> : (i + 5 - dl) as Uint<8>;
+}
+
+// Pays the pot once every player still in has shown, side pots included, as
+// src/poker/payout.ts does it: every distinct amount a live player put in is a level; the
+// chips between one level and the next go to the best score among the live players who
+// reached it, split equally, odd chips to the first winners clockwise from the dealer.
+// The split of each level (share, odd) is a witness anyone can compute from the ledger;
+// the circuit checks slice == share * winners + odd with odd < winners.
+export circuit settle(): [] {
+  assert(phase == Phase.showdown, "not at showdown");
+  const v = in_deal;
+  const f = folded;
+  assert(shown == live_count(f) as Uint<64>, "not everyone has shown");
+  const c = total;
+  const live = map((i: Uint<8>): Boolean => v[i] && !f[i], seats());
+  // Scores are under 15^6, so they compare at 32 bits; chips stay at 64.
+  const sc = map((i: Uint<8>): Uint<32> => (live[i] ? scores.lookup(i) as Uint<32> : 0), seats());
+  const fd = map((i: Uint<8>): Uint<8> => from_dealer(i), seats());
+  // The split is public data (anyone can compute it from the ledger), so disclosing is free.
+  const share = disclose(split_share());
+  const odd = disclose(split_odd());
+  const pay = fold((acc: Vector<6, Uint<64>>, j: Uint<8>): Vector<6, Uint<64>> => {
+    // Level j: the amount live seat j put in, unless a lower live seat put in the same.
+    const level = c[j];
+    const reached = map((i: Uint<8>): Boolean => c[i] >= level, seats());
+    const rep = live[j] && !fold((dup: Boolean, i: Uint<8>): Boolean => (dup || (i < j && live[i] && c[i] == level)), false, seats());
+    const prev = fold((m: Uint<64>, i: Uint<8>): Uint<64> => ((live[i] && !reached[i] && c[i] > m) ? c[i] : m), 0, seats());
+    const layer = fold((sum: Uint<64>, i: Uint<8>): Uint<64> =>
+      ((sum + (v[i] ? ((reached[i] ? level : c[i]) - (c[i] >= prev ? prev : c[i])) as Uint<64> : 0)) as Uint<64>), 0, seats());
+    const elig = map((i: Uint<8>): Boolean => live[i] && reached[i], seats());
+    const best = fold((m: Uint<32>, i: Uint<8>): Uint<32> => ((elig[i] && sc[i] > m) ? sc[i] : m), 0, seats());
+    const winner = map((i: Uint<8>): Boolean => elig[i] && sc[i] == best, seats());
+    const winners = fold((n: Uint<64>, w: Boolean): Uint<64> => (w ? (n + 1) as Uint<64> : n), 0, winner);
+    assert(!rep || (layer == ((share[j] * winners + odd[j]) as Uint<64>) && odd[j] < winners), "bad split");
+    const odd8 = odd[j] as Uint<8>; // under six, so the place comparison below is an 8-bit one
+    return map((i: Uint<8>): Uint<64> => {
+      // This winner's place among the winners, clockwise from the dealer: the first `odd` get a chip.
+      const place = fold((n: Uint<8>, m: Uint<8>): Uint<8> => ((winner[m] && fd[m] < fd[i]) ? (n + 1) as Uint<8> : n), 0 as Uint<8>, seats());
+      const chip = place < odd8 ? 1 : 0;
+      return (rep && winner[i]) ? (acc[i] + share[j] + chip) as Uint<64> : acc[i];
+    }, seats());
+  }, zeros(), seats());
+  assert(sum_u(pay) == sum_u(c), "pot not conserved");
+  stack = map((i: Uint<8>): Uint<64> => (stack[i] + pay[i]) as Uint<64>, seats());
+  phase = Phase.done;
+  deadline = 0;
+  to_act = NONE();
+}
+
+circuit first_without_score(): Uint<8> {
+  const v = in_deal;
+  const f = folded;
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && !f[k] && !scores.member(k)) ? k : acc), NONE(), seats());
+}
+
 circuit first_without_key(): Uint<8> {
   const v = in_deal;
   return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && !keys.member(k)) ? k : acc), NONE(), seats());
@@ -634,7 +838,11 @@ export circuit expire(): [] {
         if (phase == Phase.playing) {
           offender = to_act;
         } else {
-          offender = first_without_release();
+          if (phase == Phase.release) {
+            offender = first_without_release();
+          } else {
+            offender = first_without_score();
+          }
         }
       }
     }

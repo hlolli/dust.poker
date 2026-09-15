@@ -10,3 +10,4 @@ After a deal, deck keys are never published, shares for unused positions are nev
 
 - Hand histories and replays need their own disclosure actions; they never fall out of the protocol for free. "Show your bluff" is the show action after a fold-win.
 - Reveal-by-default, as people know poker, was rejected: the design exists so that no card is seen without its owner's choice.
+- Noted 2026-09-15, with showdown in the contract: the proven rank is public and carries the hand's composition (category and the ranks that decide ties), though not the suits or which cards were held. With the board public, that often pins the hole cards' ranks. Hiding the rank too would need a comparison protocol between players; not pursued for now.

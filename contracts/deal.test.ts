@@ -8,7 +8,10 @@ import {
   ecNeg,
   type JubjubPoint,
 } from "@midnight-ntwrk/compact-runtime";
+import { evaluate } from "../src/poker/hand.ts";
+import { settle as settleTs } from "../src/poker/payout.ts";
 import { Contract, ledger, pureCircuits } from "./build/deal/contract/index.js";
+import { bestFive, boardCards, cardName, holeCards, splits } from "./client.ts";
 
 // Deals executed locally through the referee: seats, phases, turns, deadlines, and the
 // betting of src/poker/deal.test.ts replayed against the contract. No chain, no proofs;
@@ -19,7 +22,7 @@ const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "expire";
+type Circuit = "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show_hand" | "settle" | "expire";
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, showdown: 6, done: 7, aborted: 8 };
 const [FOLD, CHECK, CALL, RAISE] = [0n, 0n, 1n, 2n];
 const NONE = 255n;
@@ -45,14 +48,19 @@ function player(permutation: bigint[] = randomPermutation()) {
   const secret = randomScalar();
   const x = randomScalar();
   const blinding = Array.from({ length: 52 }, randomScalar);
-  const contract = new Contract<PS>({
+  const p = { x, seat: -1, contract: null as unknown as Contract<PS> };
+  p.contract = new Contract<PS>({
     player_secret: (ctx) => [ctx.privateState, secret],
     deck_key: (ctx) => [ctx.privateState, x],
     // The circuit takes the deck already in secret order; the permutation itself stays here.
-    permuted: (ctx) => [ctx.privateState, permutation.map((p) => ctx.ledger.deck[Number(p)]!)],
+    permuted: (ctx) => [ctx.privateState, permutation.map((k) => ctx.ledger.deck[Number(k)]!)],
     blinding: (ctx) => [ctx.privateState, blinding],
+    // Showdown witnesses, computed from the ledger as a client would.
+    best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, p.seat, x)],
+    split_share: (ctx) => [ctx.privateState, splits(ctx.ledger).share],
+    split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
   });
-  return { x, contract };
+  return p;
 }
 type Player = ReturnType<typeof player>;
 
@@ -65,13 +73,16 @@ class Table {
   static async seated(n: number, players = Array.from({ length: n }, () => player())): Promise<Table> {
     const t = new Table(players);
     t.state = (await players[0]!.contract.initialState(createConstructorContext<PS>({}, coinPublicKey))).currentContractState;
-    for (let i = 0; i < players.length; i++) await t.call(i, "sit", BigInt(i));
+    for (let i = 0; i < players.length; i++) {
+      players[i]!.seat = i;
+      await t.call(i, "sit", BigInt(i));
+    }
     return t;
   }
 
   /** Circuits that take the clock get it appended. */
   async call(seat: number, circuit: Circuit, ...args: (bigint | bigint[])[]): Promise<unknown> {
-    const timed = circuit !== "sit" && circuit !== "expire";
+    const timed = circuit !== "sit" && circuit !== "expire" && circuit !== "settle";
     const p = this.players[seat]!;
     const ctx = createCircuitContext(circuit, address, coinPublicKey, this.state, {} as PS, undefined, undefined, undefined, this.now);
     const all = timed ? [...args, BigInt(this.now)] : args;
@@ -108,6 +119,46 @@ class Table {
     const holes = 2 * this.players.length;
     return street === 1 ? [holes, holes + 1, holes + 2] : street === 2 ? [holes + 3] : [holes + 4];
   }
+
+  /** Everyone checks the street down, then everyone still in releases the next one. */
+  async checkAndRelease() {
+    while (this.ledger.phase === Phase.playing) {
+      const s = Number(this.ledger.to_act);
+      await this.call(s, "act", BigInt(s), CHECK, 0n);
+    }
+    while (this.ledger.phase === Phase.release) {
+      const l = this.ledger;
+      const need = [0n, 3n, 4n, 5n][Number(l.release_street)]!;
+      const released = (i: number) => l.board_shares.member(BigInt(i)) && l.board_shares.lookup(BigInt(i)) >= need;
+      const s = seatsOf(l).find((i) => !l.folded[i] && !released(i))!;
+      await this.call(s, "release", BigInt(s));
+    }
+  }
+
+  /** Every player still in proves their hand; returns the scores by seat. */
+  async showAll(): Promise<Map<number, bigint>> {
+    const scores = new Map<number, bigint>();
+    for (const s of seatsOf(this.ledger)) {
+      if (this.ledger.folded[s]) continue;
+      scores.set(s, (await this.call(s, "show_hand", BigInt(s))) as bigint);
+    }
+    return scores;
+  }
+}
+
+const seatsOf = (l: ReturnType<typeof ledger>) => [0, 1, 2, 3, 4, 5].filter((i) => l.in_deal[i]);
+
+/** What src/poker says the payouts are, from the cards every player can now read. */
+function expectedPayouts(t: Table): number[] {
+  const l = t.ledger;
+  const board = boardCards(l).map(cardName);
+  const contenders = [0, 1, 2, 3, 4, 5].map((i) => {
+    if (!l.in_deal[i]) return null;
+    const folded = l.folded[i]!;
+    const score = folded ? 0 : evaluate([...holeCards(l, i, t.players[i]!.x).map(cardName), ...board]).score;
+    return { total: Number(l.total[i]), folded, score };
+  });
+  return settleTs(contenders, Number(l.dealer));
 }
 
 /** Ten positions for the `shares` circuit: fewer are padded by repeating the last one. */
@@ -298,6 +349,80 @@ test("one player with chips left releases the whole board at once", async () => 
   await t.call(2, "release", 2n);
   expect(t.ledger.phase).toBe(Phase.showdown);
   expect(t.ledger.street).toBe(3n);
+}, 60_000);
+
+test("showdown: three players check to the river, prove their hands, and the pot is paid", async () => {
+  const t = await Table.seated(3);
+  await t.dealt();
+  await t.call(0, "act", 0n, CALL, 0n);
+  await t.call(1, "act", 1n, CALL, 0n);
+  await t.call(2, "act", 2n, CHECK, 0n);
+  for (let street = 1; street <= 3; street++) {
+    await t.checkAndRelease();
+    expect(t.ledger.street).toBe(BigInt(street));
+  }
+  await t.checkAndRelease();
+  expect(t.ledger.phase).toBe(Phase.showdown);
+  await t.refuses(0, "settle", /not everyone has shown/);
+
+  // Each proof's score is exactly what src/poker/hand.ts gives the same seven cards.
+  const scores = await t.showAll();
+  const l = t.ledger;
+  const board = boardCards(l).map(cardName);
+  for (const [s, score] of scores) {
+    const seven = [...holeCards(l, s, t.players[s]!.x).map(cardName), ...board];
+    expect(score).toBe(BigInt(evaluate(seven).score));
+    expect(l.scores.lookup(BigInt(s))).toBe(score);
+  }
+  await t.refuses(0, "show_hand", /already shown/, 0n);
+
+  const before = l.stack.map(Number);
+  const payouts = expectedPayouts(t);
+  await t.call(1, "settle");
+  expect(t.ledger.phase).toBe(Phase.done);
+  expect(t.ledger.stack.map(Number)).toEqual(before.map((s, i) => s + payouts[i]!));
+  expect(t.ledger.stack.slice(0, 3).reduce((a, b) => a + b, 0n)).toBe(600n);
+
+  // The next deal starts from done.
+  await t.call(0, "start_deal");
+  expect(t.ledger.deal_no).toBe(2n);
+}, 120_000);
+
+test("showdown with side pots: a short all-in, a covering all-in, and a caller with chips", async () => {
+  const t = await Table.seated(3);
+  await t.dealt();
+  await t.call(0, "act_out", 0n, FOLD, 0n);
+  await t.call(1, "act_out", 1n, FOLD, 0n); // seat 2 wins the blinds: 200, 199, 201
+  await t.dealt(); // button on 1; blinds 2 (1) and 0 (2); seat 1 acts first
+  await t.call(1, "act_out", 1n, RAISE, 199n); // all in for 199
+  await t.call(2, "act", 2n, CALL, 0n); // 199 in, 2 behind
+  await t.call(0, "act_out", 0n, RAISE, 200n); // all in for 200, a raise of one chip over the top
+  await t.call(2, "act", 2n, CALL, 0n); // 200 in, 1 behind: the only one left to act
+  expect(t.ledger.total.slice(0, 3)).toEqual([200n, 199n, 200n]);
+  expect(t.ledger.phase).toBe(Phase.release);
+  await t.call(2, "release", 2n);
+  expect(t.ledger.phase).toBe(Phase.showdown);
+
+  await t.showAll();
+  const before = t.ledger.stack.map(Number);
+  const payouts = expectedPayouts(t);
+  await t.call(0, "settle");
+  // Levels 199 (all three) and 200 (seats 0 and 2); the TS side pots agree with the contract.
+  expect(t.ledger.stack.map(Number)).toEqual(before.map((s, i) => s + payouts[i]!));
+  expect(t.ledger.stack.slice(0, 3).reduce((a, b) => a + b, 0n)).toBe(600n);
+}, 120_000);
+
+test("a player who does not show in time aborts the deal on themselves", async () => {
+  const t = await Table.seated(2);
+  await t.dealt();
+  await t.call(0, "act_out", 0n, RAISE, 200n);
+  await t.call(1, "act_out", 1n, CALL, 0n);
+  expect(t.ledger.phase).toBe(Phase.showdown);
+  await t.call(1, "show_hand", 1n);
+  t.now += 90;
+  await t.call(1, "expire");
+  expect(t.ledger.phase).toBe(Phase.aborted);
+  expect(t.ledger.offender).toBe(0n);
 }, 60_000);
 
 test("heads up: the dealer posts the small blind and acts first preflop", async () => {
