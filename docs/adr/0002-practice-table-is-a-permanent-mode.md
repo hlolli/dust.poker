@@ -6,3 +6,4 @@ The game is built graphics first, with the bots-only Practice table as the first
 
 - The scene never sees the deck or another seat's hole cards, even in Practice, so switching a table to Live changes no rendering code.
 - Bots and the Practice referee ship in the client bundle; they are product, not test fixtures.
+- Practice runs the real dealing protocol (ADR 0004) too, executed locally without proofs. Each simulated player keeps its own private state, managed separately from the human's. Proof bypasses exist only in the Practice path, never in the deployable Live path, and end-to-end tests that generate and verify real proofs stay in the suite.

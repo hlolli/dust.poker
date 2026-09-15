@@ -74,6 +74,40 @@ _Avoid_: Bank, prize
 A single move by a seat on its turn: fold, check, call, bet, raise.
 _Avoid_: Move, play, bet (as the general term)
 
+### Dealing
+
+**Deck**:
+The 52 cards of one deal, locked and shuffled so that nobody knows their order. Fresh for every deal.
+_Avoid_: Pack, cards (as the general term)
+
+**Shuffle**:
+The mixing of the deck by every seated player in turn, each exactly once. The deck is ready when the last player has mixed it.
+_Avoid_: Reshuffle, shuffling round
+
+**Deck key**:
+The secret a player makes fresh for each deal, which locks their part of the deck. It never leaves their machine.
+_Avoid_: Private key, session key, seed
+
+**Share**:
+One player's contribution to unlocking one card. A card can be read only with a share from every player except the reader, plus the reader's own deck key.
+_Avoid_: Decryption, partial decryption, reveal
+
+**Release**:
+The moment every player still in the deal has posted their shares for a street's board cards, making those cards readable to the table.
+_Avoid_: Reveal, flip
+
+**Show**:
+A player's choice to make their own hole cards readable to the table after a deal, whether they won, lost or folded. Nothing else ever makes a hole card readable.
+_Avoid_: Reveal, expose, table (as a verb)
+
+**Bond**:
+Chips a player locks when seated and forfeits if they abandon a deal in progress. Returned when they leave.
+_Avoid_: Deposit, collateral, penalty, stake
+
+**Abort**:
+The end of a deal that cannot continue because a required step never came. Bets return to the players; the player who missed the step forfeits.
+_Avoid_: Cancel, void, timeout (as the outcome)
+
 ### Authority
 
 **Referee**:
