@@ -91,28 +91,40 @@ for (let i = 51; i > 0; i--) {
   const j = Math.floor(Math.random() * (i + 1));
   [permutation[i], permutation[j]] = [permutation[j]!, permutation[i]!];
 }
-const x = randomScalar();
-const contract = new Contract<PS>({
-  deck_key: (ctx) => [ctx.privateState, x],
-  permuted: (ctx) => [ctx.privateState, permutation.map((p) => ctx.ledger.deck[Number(p)]!)],
-  blinding: (ctx) => [ctx.privateState, Array.from({ length: 52 }, randomScalar)],
-});
+// Two players share the ledger; each has an identity, a deck key and a shuffle of their own.
+const contractFor = () => {
+  const secret = randomScalar();
+  const x = randomScalar();
+  return new Contract<PS>({
+    player_secret: (ctx) => [ctx.privateState, secret],
+    deck_key: (ctx) => [ctx.privateState, x],
+    permuted: (ctx) => [ctx.privateState, permutation.map((p) => ctx.ledger.deck[Number(p)]!)],
+    blinding: (ctx) => [ctx.privateState, Array.from({ length: 52 }, randomScalar)],
+  });
+};
+const [a, b] = [contractFor(), contractFor()];
+const now = 1_700_000_000;
 
-// Run the circuits locally to get the proof preimages, in a realistic order.
-let state: Parameters<typeof createCircuitContext>[3] = (await contract.initialState(createConstructorContext<PS>({}, coinPublicKey)))
-  .currentContractState;
+// Run the circuits locally to get the proof preimages, in the order a deal takes them;
+// player A's calls are the ones proved.
+let state: Parameters<typeof createCircuitContext>[3] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey))).currentContractState;
 const preimages = new Map<string, Uint8Array>();
-async function run(circuit: "post_key" | "shuffle" | "shares", ...a: (bigint | bigint[])[]) {
-  const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS);
-  const r = await (contract.circuits[circuit] as (c: typeof ctx, ...z: (bigint | bigint[])[]) => Promise<any>)(ctx, ...a);
+async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares", ...z: (bigint | bigint[])[]) {
+  const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS, undefined, undefined, undefined, now);
+  const r = await (contract.circuits[circuit] as (c: typeof ctx, ...y: (bigint | bigint[])[]) => Promise<any>)(ctx, ...z);
   state = r.context.callContext.currentQueryContext.state;
   // The root circuit's proof data is the last entry of the call trace (depth-first order).
   const pd = r.context.callProofDataTrace.at(-1)!;
-  preimages.set(circuit, proofDataIntoSerializedPreimage(pd.input, pd.output, pd.publicTranscript, pd.privateTranscriptOutputs, circuit));
+  if (contract === a) preimages.set(circuit, proofDataIntoSerializedPreimage(pd.input, pd.output, pd.publicTranscript, pd.privateTranscriptOutputs, circuit));
 }
-await run("post_key", 0n);
-await run("shuffle");
-await run("shares", 0n, [2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n]); // seat 0's hole-card stage: everyone else's positions
+await run(a, "sit", 0n);
+await run(b, "sit", 1n);
+await run(a, "start_deal", BigInt(now));
+await run(a, "post_key", 0n, BigInt(now));
+await run(b, "post_key", 1n, BigInt(now));
+await run(a, "shuffle", 0n, BigInt(now));
+await run(b, "shuffle", 1n, BigInt(now));
+await run(a, "shares", 0n, [2n, 3n, 3n, 3n, 3n, 3n, 3n, 3n, 3n, 3n]); // the other player's hole positions, padded
 
 for (const circuit of args.circuits!.split(",")) {
   const k = zkir.Zkir.fromJson(await Bun.file(`${args.zkir}/${circuit}.zkir`).text()).getK();
