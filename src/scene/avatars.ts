@@ -131,6 +131,24 @@ export function poseSeated(avatar: Avatar, seatHeight = 0.5) {
   avatar.root.updateMatrixWorld(true);
 }
 
+/**
+ * Stands the avatar at ease behind a counter: arms down, hands resting a little forward
+ * at counter height, a small nod of attention. Facing +z in root space.
+ */
+export function poseStanding(avatar: Avatar) {
+  avatar.root.updateMatrixWorld(true);
+  const neck = new THREE.Vector3();
+  avatar.bones.get("Bip01 Neck")?.getWorldPosition(neck);
+  avatar.root.worldToLocal(neck);
+  for (const side of ["L", "R"] as const) {
+    const s = side === "L" ? 1 : -1;
+    aim(avatar, `Bip01 ${side} UpperArm`, `Bip01 ${side} Forearm`, new THREE.Vector3(s * 0.12, -1, 0.15));
+    aimAt(avatar, `Bip01 ${side} Forearm`, `Bip01 ${side} Hand`, neck.clone().add(new THREE.Vector3(s * 0.2, -0.62, 0.28)));
+  }
+  turn(avatar, "Bip01 Head", X, 6);
+  avatar.root.updateMatrixWorld(true);
+}
+
 /** Blinks now and then, and lets the eyes rest half-lidded between blinks. */
 export function idleFace(avatar: Avatar, t: number) {
   const phase = (t / 1000 + avatar.root.id * 0.37) % 4.2;

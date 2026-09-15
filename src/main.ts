@@ -3,7 +3,9 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
 import { PracticeReferee } from "./referee/practice.ts";
 import { createSeat } from "./scene/avatar.ts";
-import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseSeated } from "./scene/avatars.ts";
+import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseSeated, poseStanding } from "./scene/avatars.ts";
+import { BARTENDER_POSE, createBar } from "./scene/bar.ts";
+import bartenderUrl from "./assets/avatars/Business_Male_02.glb";
 import youUrl from "./assets/avatars/Business_Male_01.glb";
 import bot1Url from "./assets/avatars/Business_Female_02.glb";
 import bot2Url from "./assets/avatars/Business_Male_04.glb";
@@ -36,7 +38,8 @@ scene.environmentIntensity = 0.35;
 pmrem.dispose();
 const room = createRoom();
 const table = createTable();
-scene.add(room, table);
+const bar = createBar();
+scene.add(room, table, bar);
 
 const seats = new THREE.Group();
 seats.name = "seats";
@@ -87,7 +90,19 @@ const { group: splash, practiceDoor } = createSplash();
 scene.add(splash);
 
 // Nothing above ever moves: world matrices once, then no per-frame matrix work.
-for (const o of [room, table, seats, splash]) freeze(o);
+for (const o of [room, table, bar, seats, splash]) freeze(o);
+
+// The bartender, standing behind the counter.
+loadAvatar(bartenderUrl)
+  .then((a) => {
+    a.root.position.copy(BARTENDER_POSE.position);
+    a.root.rotation.y = BARTENDER_POSE.rotationY;
+    a.root.name = "bartender";
+    poseStanding(a);
+    scene.add(a.root);
+    avatars.push(a); // blinks with the rest
+  })
+  .catch((e) => console.warn("bartender failed to load", e));
 
 // The rig is the player's body: it sits at floor level at a pose in the room.
 // The camera is the head, at eye height inside it. XR replaces the head pose.

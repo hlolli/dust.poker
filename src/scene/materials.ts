@@ -65,7 +65,7 @@ const sets = {
 };
 
 /** Polished black marble: the hall floor. `repeat` is tiles across the surface. */
-export const marbleBlack = (repeat = 6) => pbr(sets.marbleBlack, repeat, { color: 0x4a4a4a, roughness: 0.2 });
+export const marbleBlack = (repeat = 6) => pbr(sets.marbleBlack, repeat, { color: 0x4a4a4a, roughness: 0.32 }); // polished, but the chandelier must not blow out on it
 /** Veined white marble: columns and the sign panel. */
 export const marbleWhite = (repeat = 1) => pbr(sets.marbleWhite, repeat, { roughness: 0.35 });
 /** Dark polished wood: wainscot, table rail, bar. */
@@ -76,6 +76,10 @@ export const velvet = (color = 0x0f3d2e, repeat = 3) => pbr(sets.fabric, repeat,
 export const leather = (repeat = 1) => pbr(sets.leather, repeat, { color: 0x8a1c1c, roughness: 0.55 });
 /** Brass: the smooth metal set tinted gold, fully metallic. */
 export const brass = (repeat = 1) => pbr(sets.metal, repeat, { color: 0xd4a34a, metalness: 1, roughness: 0.3 });
+/** Chrome: the same metal untinted and polished; mirrors and 50s trim. */
+export const chrome = (repeat = 1) => pbr(sets.metal, repeat, { color: 0xf0f0f0, metalness: 1, roughness: 0.06 });
+/** Cream stone: the white marble set warmed, for Gaudi-style tree columns and vault ribs. */
+export const stone = (repeat = 1) => pbr(sets.marbleWhite, repeat, { color: 0xe6dcc6, roughness: 0.6 });
 /** Warm plaster: upper walls and vault. */
 export const plaster = (repeat = 4) => pbr(sets.plaster, repeat, { color: 0xd8c9a8, roughness: 0.95 });
 /** Red carpet under the table. */
