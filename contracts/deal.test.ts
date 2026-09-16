@@ -625,6 +625,63 @@ test("the betting clock: a player who does not act in time aborts the deal on th
   expect(u.ledger.offender).toBe(1n);
 }, 60_000);
 
+test("sitting out: a seat that stood up is left out of the next deal and its deck, and can then leave", async () => {
+  const t = await TestTable.seated(3);
+  await t.dealt();
+  // Standing up mid-deal is allowed; the deal in progress is unaffected.
+  await t.call(2, "stand_up", 2n, true);
+  await t.refuses(2, "leave", /in a deal/, 2n);
+  expect(t.ledger.in_deal[2]).toBe(true);
+  await t.foldOut();
+  // Whoever starts the next deal, seat 2 is not in it, nor in the deck prepared for the one after.
+  await t.dealt();
+  expect(t.ledger.in_deal.slice(0, 3)).toEqual([true, true, false]);
+  expect(t.ledger.next_in_deal.slice(0, 3)).toEqual([true, true, false]);
+  await t.call(2, "leave", 2n);
+  expect(t.ledger.seat_owner.member(2n)).toBe(false);
+  // Sitting back in before the next deal.
+  await t.call(1, "stand_up", 1n, true);
+  await t.call(1, "stand_up", 1n, false);
+  await t.foldOut();
+  await t.dealt();
+  expect(t.ledger.n_players).toBe(2n);
+}, 60_000);
+
+test("everyone all in from the blinds: no betting, hands tabled, the board runs out", async () => {
+  // Three players put all but one chip in; the winner leaves; the two left have a chip each.
+  const t = await TestTable.seated(3);
+  await t.dealt();
+  await t.call(0, "act", 0n, RAISE, 199n);
+  await t.call(1, "act", 1n, CALL, 0n);
+  await t.call(2, "act", 2n, CALL, 0n);
+  expect(t.ledger.stack.slice(0, 3)).toEqual([1n, 1n, 1n]);
+  while (t.ledger.phase !== Phase.showdown) await t.checkAndRelease();
+  await t.showAll();
+  await t.call(0, "settle");
+  const winner = [0, 1, 2].find((i) => t.ledger.stack[i]! > 1n)!;
+  await t.call(winner, "leave", BigInt(winner));
+  // Heads up with a chip each: both blinds are all in before a card is dealt.
+  await t.call([0, 1, 2].find((i) => i !== winner)!, "start_deal");
+  expect(t.ledger.to_act).toBe(NONE);
+  const l = t.ledger;
+  const players = seatsOf(l);
+  for (const i of players) await t.call(i, "post_key", BigInt(i));
+  for (const i of players) await t.call(i, "shuffle", BigInt(i));
+  for (const j of players) {
+    const others = players.filter((i) => i !== j).flatMap((i) => [2 * players.indexOf(i), 2 * players.indexOf(i) + 1]);
+    await t.call(j, "shares", BigInt(j), ten(others));
+  }
+  expect(t.ledger.phase).toBe(Phase.tabling); // not stuck in playing with nobody to act
+  await t.tableAll();
+  expect(t.ledger.phase).toBe(Phase.release); // nobody posted board shares with an all-in
+  await t.checkAndRelease();
+  expect(t.ledger.phase).toBe(Phase.showdown);
+  await t.showAll();
+  await t.call(players[0]!, "settle");
+  expect(t.ledger.phase).toBe(Phase.done);
+  expect(t.ledger.stack.reduce((a, b) => a + b, 0n)).toBe(2n);
+}, 120_000);
+
 test("the time bank: seconds past the thirty come out of it, once; it refills each deal", async () => {
   const t = await TestTable.seated(3);
   await t.dealt();

@@ -38,6 +38,10 @@ _Avoid_: Lobby, waiting room, matchmaking
 The chips a seat has at the table, available to wager. Distinct from whatever the player holds in their wallet.
 _Avoid_: Balance, chips (as the general term), bankroll
 
+**Sitting out**:
+A seated player who has asked to be left out of the next deals; their chips stay at the table until they leave.
+_Avoid_: Away, AFK, standing up (as the state)
+
 **Buy-in**:
 Chips a player brings to their stack, when seated or between deals, so that the stack is between 40 and 100 big blinds. Never during a deal the player is in.
 _Avoid_: Re-buy, top-up, reload, add-on

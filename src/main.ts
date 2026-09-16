@@ -29,7 +29,10 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.xr.enabled = true;
-document.body.append(renderer.domElement, VRButton.createButton(renderer));
+document.body.append(renderer.domElement);
+// Browser first: the VR entry button appears only where WebXR says a headset session is
+// possible, so a desktop browser never shows a warning about it.
+void navigator.xr?.isSessionSupported("immersive-vr").then((ok) => ok && document.body.append(VRButton.createButton(renderer)));
 
 const scene = new THREE.Scene();
 // Marble and brass need something to reflect; a generated room environment is cheap and enough.

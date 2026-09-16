@@ -46,6 +46,7 @@ const collect = (t: Table) => {
   await t.call(0, "settle");
   const broke = seatsOf(t.ledger).find((i) => t.ledger.stack[i] === 0n)!;
   await t.call(broke, "buy_in", BigInt(broke), 200n);
+  await t.call(1 - broke, "stand_up", BigInt(1 - broke), true);
   await t.call(1 - broke, "leave", BigInt(1 - broke));
   collect(t);
 }

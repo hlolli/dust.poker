@@ -13,15 +13,15 @@ const address = dummyContractAddress();
 type PS = Record<string, never>;
 export type State = Parameters<typeof createCircuitContext>[3];
 export type Circuit =
-  | "join" | "buy_in" | "leave" | "start_deal" | "post_key" | "shuffle" | "post_next_key" | "shuffle_next" | "expire_next"
+  | "join" | "buy_in" | "stand_up" | "leave" | "start_deal" | "post_key" | "shuffle" | "post_next_key" | "shuffle_next" | "expire_next"
   | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
 /** Every circuit a proof gate must cover: all exported ones but the pure card_point. */
 export const CIRCUITS: Circuit[] = [
-  "join", "buy_in", "leave", "start_deal", "post_key", "shuffle", "post_next_key", "shuffle_next", "expire_next",
+  "join", "buy_in", "stand_up", "leave", "start_deal", "post_key", "shuffle", "post_next_key", "shuffle_next", "expire_next",
   "shares", "release", "act", "act_out", "show", "show_hand", "settle", "expire", "settle_abort",
 ];
-export type Arg = bigint | bigint[] | Uint8Array;
-const UNTIMED = new Set<Circuit>(["join", "buy_in", "leave", "expire", "settle", "settle_abort"]);
+export type Arg = bigint | bigint[] | Uint8Array | boolean;
+const UNTIMED = new Set<Circuit>(["join", "buy_in", "stand_up", "leave", "expire", "settle", "settle_abort"]);
 export const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
 export const Prep = { none: 0, keys: 1, shuffle: 2, ready: 3 };
 export const [FOLD, CHECK, CALL, RAISE] = [0n, 0n, 1n, 2n];

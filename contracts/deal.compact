@@ -4,6 +4,8 @@
 // Phases of a deal:
 //   join, buy_in the referee seats the caller (players never choose a seat), the buy-in
 //                and the bond paid into escrow; more chips between deals, up to the maximum
+//   stand_up     sit out of the next deals (any time), or back in; leave needs this first
+//                whenever someone else keeps starting deals
 //   leave        stack and bond back to the player's address, while not in a deal
 //   start_deal   idle or done -> holes when a prepared deck is ready for the players present,
 //                else -> keys; the dealer button moves, the blinds are posted; and the deck
@@ -96,6 +98,9 @@ export ledger seat_owner: Map<Uint<8>, JubjubPoint>;
 // seat -> the address stack and bond go back to
 export ledger payout_address: Map<Uint<8>, Bytes<32>>;
 export ledger stack: Vector<6, Uint<64>>;
+// Seats sitting out the next deals (and the next deck), so a leave cannot be pre-empted by
+// someone starting deal after deal.
+export ledger leaving: Vector<6, Boolean>;
 
 // The deal in progress.
 export ledger phase: Phase;
@@ -389,7 +394,17 @@ export circuit join(address: Bytes<32>, buy: Uint<64>): Uint<8> {
   seat_owner.insert(s, who);
   payout_address.insert(s, disclose(address));
   stack = set_u(stack, s, b);
+  leaving = set_b(leaving, s, false);
   return s;
+}
+
+// Sits out of the next deals (up == true), or back in. Any time, a deal in progress or not:
+// this is how a player makes sure they can leave, since start_deal is anyone's to call and
+// leave is refused during a deal the player is in.
+export circuit stand_up(seat: Uint<8>, up: Boolean): [] {
+  const s = disclose(seat);
+  owner_check(s);
+  leaving = set_b(leaving, s, disclose(up));
 }
 
 // Buys in again: adds chips to the caller's stack, up to the maximum buy-in, while the seat
@@ -407,13 +422,23 @@ export circuit buy_in(seat: Uint<8>, amount: Uint<64>): [] {
 }
 
 circuit pay_out(s: Uint<8>, amount: Uint<64>): [] {
-  sendUnshielded(asset, amount as Uint<128>, right<ContractAddress, UserAddress>(UserAddress { bytes: payout_address.lookup(s) }));
+  if (amount > 0) {
+    sendUnshielded(asset, amount as Uint<128>, right<ContractAddress, UserAddress>(UserAddress { bytes: payout_address.lookup(s) }));
+  }
 }
 
 circuit free_seat(s: Uint<8>): [] {
   seat_owner.remove(s);
   payout_address.remove(s);
   stack = set_u(stack, s, 0);
+  leaving = set_b(leaving, s, false);
+}
+
+// Who plays the next deal: seated, with chips, and not sitting out.
+circuit players_present(): Vector<6, Boolean> {
+  const st = stack;
+  const lv = leaving;
+  return map((s: Uint<8>): Boolean => seat_owner.member(s) && st[s] > 0 && !lv[s], seats());
 }
 
 // Leaves the table: stack and bond go back to the player's address. Not during a deal the
@@ -449,7 +474,7 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
   const now = disclose(claimed_now);
   check_now(now);
   const st = stack;
-  const present = map((s: Uint<8>): Boolean => seat_owner.member(s) && st[s] > 0, seats());
+  const present = players_present();
   const n = count_b(present);
   assert(n >= 2, "not enough players");
   const np = next_in_deal;
@@ -653,8 +678,7 @@ export circuit expire_next(claimed_now: Uint<64>): [] {
     pay_out(o, at_u(stack, o));
     free_seat(o);
   }
-  const st = stack;
-  const present = map((s: Uint<8>): Boolean => seat_owner.member(s) && st[s] > 0, seats());
+  const present = players_present();
   begin_prep(now, present, count_b(present));
 }
 
@@ -759,13 +783,23 @@ export circuit shares(seat: Uint<8>, positions: Vector<10, Uint<8>>, claimed_now
     }
     post_share(s, pos, x, d);
   }
-  // Once every player has shared every other player's hole positions, betting begins.
+  // Once every player has shared every other player's hole positions, betting begins; unless
+  // the blinds already put everyone all in, in which case there is nothing to bet and the
+  // street closes at once (hands are tabled, the board runs out).
   const need = (holes - 2) as Uint<8>;
   if (before < need && hole_count(s) == need) {
     holes_done.increment(1);
     if (holes_done == n as Uint<64>) {
       phase = Phase.playing;
-      set_turn(to_act, now);
+      // Nobody has acted yet, so the round is open exactly when someone can still act;
+      // otherwise the blinds put everyone all in and hands are tabled at once (what
+      // close_street would do on the preflop street, spelled out to keep this circuit small).
+      if (to_act != NONE()) {
+        set_turn(to_act, now);
+      } else {
+        phase = Phase.tabling;
+        deadline = due(now, TABLING_SECONDS());
+      }
     }
   }
 }
