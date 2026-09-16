@@ -1,12 +1,12 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { type Avatar, idleFace, loadAvatar, poseStanding } from "../scene/avatars.ts";
-import { applyLook, DEFAULT_LOOK, HAIR_COLOURS, type Look, OUTFIT_COLOURS } from "../scene/look.ts";
+import { applyLook, DEFAULT_LOOK, type Look, OUTFIT_COLOURS } from "../scene/look.ts";
 import { MODELS } from "../scene/models.ts";
 
 /**
  * The character creator: a name, and a character turning slowly under a spotlight while the
- * player changes it: the build (one of the base characters), skin, hair, outfit, height.
+ * player changes it: the build (one of the base characters), skin, outfit, height.
  * Styled in src/index.html (.creator). Resolves with the result, or null on "Never mind".
  */
 export function showCreator(initial?: { name: string; look: Look }): Promise<{ name: string; look: Look } | null> {
@@ -21,7 +21,6 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
         <label class="field"><span>Name on the plate</span><input name="name" maxlength="24" autocomplete="off" required value="${escape(initial?.name ?? "")}" placeholder="What the table calls you" /></label>
         <fieldset><legend>Build</legend><div class="tickets">${MODELS.map((m, i) => `<label class="ticket"><input type="radio" name="model" value="${i}" ${i === look.model ? "checked" : ""}/><span>${m.label}</span></label>`).join("")}</div></fieldset>
         <fieldset><legend>Skin</legend><input type="range" name="skin" min="0" max="1" step="0.02" value="${look.skin}" /></fieldset>
-        <fieldset><legend>Hair</legend><div class="swatches">${HAIR_COLOURS.map((c) => `<label class="swatch"><input type="radio" name="hair" value="${c}" ${c === look.hair ? "checked" : ""}/><span style="background:${c}"></span></label>`).join("")}</div></fieldset>
         <fieldset><legend>Outfit</legend><div class="swatches">${OUTFIT_COLOURS.map((c) => `<label class="swatch"><input type="radio" name="outfit" value="${c}" ${c === look.outfit ? "checked" : ""}/><span style="background:${c}"></span></label>`).join("")}</div></fieldset>
         <fieldset><legend>Height</legend><input type="range" name="height" min="0.92" max="1.08" step="0.01" value="${look.height}" /></fieldset>
         <div class="row"><button type="submit" class="save">${initial ? "Keep this look" : "Take this name"}</button><button type="button" class="cancel">Never mind</button></div>

@@ -135,15 +135,34 @@ export function poseSeated(avatar: Avatar, seatHeight = 0.5) {
  * A seated player's hands: holding cards up near the chest, or, with no cards, resting apart
  * on the rail in front of them. Re-aims the forearms only, so it can follow the deal.
  */
-export function poseHands(avatar: Avatar, holding: boolean) {
+export function poseHands(avatar: Avatar, holding: boolean, lift = 0) {
   avatar.root.updateMatrixWorld(true);
   const neck = new THREE.Vector3();
   avatar.bones.get("Bip01 Neck")?.getWorldPosition(neck);
   avatar.root.worldToLocal(neck);
   for (const side of ["L", "R"] as const) {
     const s = side === "L" ? 1 : -1;
-    const target = holding ? new THREE.Vector3(s * 0.07, -0.16, 0.34) : new THREE.Vector3(s * 0.2, -0.36, 0.42);
+    // `lift` raises held cards and holds them a little further out: the first-person player reads them past the thumbs at a comfortable distance.
+    const target = holding ? new THREE.Vector3(s * 0.07, -0.16 + lift * 2, 0.34 + lift * 1.4) : new THREE.Vector3(s * 0.2, -0.36, 0.42);
     aimAt(avatar, `Bip01 ${side} Forearm`, `Bip01 ${side} Hand`, neck.clone().add(target));
+  }
+  avatar.root.updateMatrixWorld(true);
+}
+
+/**
+ * A stride of a walk, by `phase` in radians: the legs swing past each other, the trailing
+ * knee bends, the arms swing the other way. Facing +z in root space; call every frame while
+ * walking, then pose the avatar however it should stand or sit.
+ */
+export function poseWalking(avatar: Avatar, phase: number) {
+  avatar.root.updateMatrixWorld(true);
+  for (const side of ["L", "R"] as const) {
+    const s = side === "L" ? 1 : -1;
+    const swing = Math.sin(phase + (s > 0 ? 0 : Math.PI));
+    aim(avatar, `Bip01 ${side} Thigh`, `Bip01 ${side} Calf`, new THREE.Vector3(s * 0.05, -1, swing * 0.42));
+    aim(avatar, `Bip01 ${side} Calf`, `Bip01 ${side} Foot`, new THREE.Vector3(0, -1, swing < 0 ? swing * 0.7 : 0.05)); // the trailing leg folds
+    aim(avatar, `Bip01 ${side} UpperArm`, `Bip01 ${side} Forearm`, new THREE.Vector3(s * 0.12, -1, -swing * 0.3));
+    aim(avatar, `Bip01 ${side} Forearm`, `Bip01 ${side} Hand`, new THREE.Vector3(s * 0.05, -1, 0.25 - swing * 0.25));
   }
   avatar.root.updateMatrixWorld(true);
 }
@@ -179,7 +198,7 @@ export function idleFace(avatar: Avatar, t: number) {
  * +z (card face) turned back toward the player and tilted up to their eyes, so the owner
  * reads the cards and the table sees the backs. Independent of the hand bones' axes.
  */
-export function cardAnchor(avatar: Avatar): THREE.Object3D {
+export function cardAnchor(avatar: Avatar, lift = 0): THREE.Object3D {
   avatar.root.updateMatrixWorld(true);
   const l = new THREE.Vector3();
   const r = new THREE.Vector3();
@@ -188,7 +207,9 @@ export function cardAnchor(avatar: Avatar): THREE.Object3D {
   const mid = avatar.root.worldToLocal(l.add(r).multiplyScalar(0.5));
   const anchor = new THREE.Object3D();
   anchor.name = "cards";
-  anchor.position.copy(mid).add(new THREE.Vector3(0, 0.1, 0.07)); // above and ahead of the fingertips
+  // Just above the palms; with `lift` (the first-person player) higher and a little further out, so
+  // the faces are read past the thumbs and the fingertips stay behind the cards.
+  anchor.position.copy(mid).add(new THREE.Vector3(0, 0.09 + lift, 0.03 + lift * 0.4));
   anchor.rotation.set(-0.55, Math.PI, 0, "YXZ"); // face the player, leaning back toward the eyes
   avatar.root.add(anchor);
   return anchor;

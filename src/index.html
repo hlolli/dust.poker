@@ -89,19 +89,19 @@
       .line h2 { margin: 0 0 12px; font: 400 15px var(--display); color: var(--brass); letter-spacing: 0.04em; }
 
       /* A show on the listing: its name in marquee letters, a line about it beneath. */
-      .show {
+      .listing {
         display: block; width: 100%; text-align: left; padding: 0; margin: 0;
         background: none; border: 0; color: inherit; font: inherit; cursor: default;
       }
-      button.show { cursor: pointer; }
-      .show .title {
+      button.listing { cursor: pointer; }
+      .listing .title {
         display: block; font: 400 clamp(30px, 6vw, 42px)/1.15 var(--display); color: var(--cream);
         text-shadow: 0 0 12px #ffe9b066, 0 2px 0 #00000088;
         transition: text-shadow 200ms, color 200ms;
       }
-      button.show:hover:not(:disabled) .title, button.show:focus-visible .title { color: #fff; text-shadow: 0 0 10px #fff3, 0 0 28px var(--gold), 0 2px 0 #00000088; }
-      button.show:disabled { cursor: default; }
-      .show .sub { display: block; margin-top: 6px; color: #d9c6a8; font: italic 500 18px/1.4 var(--text); overflow-wrap: anywhere; }
+      button.listing:hover:not(:disabled) .title, button.listing:focus-visible .title { color: #fff; text-shadow: 0 0 10px #fff3, 0 0 28px var(--gold), 0 2px 0 #00000088; }
+      button.listing:disabled { cursor: default; }
+      .listing .sub { display: block; margin-top: 6px; color: #d9c6a8; font: italic 500 18px/1.4 var(--text); overflow-wrap: anywhere; }
       .unlit .title { color: #5e4e3e; text-shadow: none; }
       .unlit .sub { color: #8a7a66; }
 
@@ -206,6 +206,31 @@
       .creator .row button:hover { filter: brightness(1.15); }
       @media (max-width: 720px) { .creator { grid-template-columns: 1fr; } .creator .stage { min-height: 46vh; } .creator .controls { border-left: 0; border-top: 1px solid var(--brass-dark); } }
 
+      /* Your hand, in the corner above the bar: small cards and a line naming the hand. */
+      .hand {
+        position: fixed; right: clamp(8px, 2vw, 16px); bottom: 80px; z-index: 1;
+        display: grid; grid-template-columns: auto auto; gap: 6px 14px; align-items: end;
+        padding: 10px 12px; background: #160610cc; border: 1px solid var(--brass); border-radius: 6px;
+        box-shadow: 0 6px 20px #00000080;
+      }
+      .hand[hidden] { display: none; }
+      .hand .cards { display: flex; gap: 4px; }
+      .hand .card {
+        position: relative; width: 30px; height: 42px; border-radius: 3px; background: #f6f1e6;
+        box-shadow: 0 1px 0 #00000088; font: 700 15px/1 var(--text);
+      }
+      .hand .hole .card { width: 38px; height: 54px; font-size: 19px; }
+      .hand .card b { position: absolute; left: 3px; top: 2px; }
+      .hand .card i { position: absolute; right: 3px; bottom: 2px; font-style: normal; font-size: 1.05em; }
+      .hand .card.red { color: #b3141c; }
+      .hand .card.black { color: #1a1a1a; }
+      .hand .card.back { background: #7a1020; border: 2px solid #f6f1e6; box-sizing: border-box; }
+      .hand .card.empty { background: none; border: 1px dashed #8a6a1c80; box-shadow: none; }
+      .hand .hint { grid-column: 1 / -1; margin: 0; font: italic 600 16px/1.2 var(--text); color: var(--gold); text-align: right; }
+      .hand.folded .hole .card { opacity: 0.45; }
+      .hand.folded .hint { color: var(--dim); }
+      @media (max-width: 640px) { .hand { padding: 6px 8px; gap: 4px 8px; } .hand .card { width: 22px; height: 31px; font-size: 11px; } .hand .hole .card { width: 28px; height: 40px; font-size: 14px; } .hand .hint { font-size: 13px; } }
+
       /* The band's note, in the corner. */
       .mute {
         position: fixed; top: 14px; right: 14px; z-index: 1; height: 38px; min-width: 38px; padding: 0 10px; cursor: pointer;
@@ -214,21 +239,24 @@
       .mute.off { color: var(--dim); border-color: var(--brass-dark); text-decoration: line-through; }
       .mute:hover { filter: brightness(1.2); }
 
-      /* ---- The action bar: velvet and brass, like the room. Buttons keep the rail's colours. */
+      /* ---- The action bar: velvet and brass, like the room. Buttons keep the rail's colours. --
+         One line at every width: sizes follow the viewport, nothing wraps, the key hints go first. */
       .actions {
         position: fixed; left: 0; right: 0; bottom: 0; z-index: 1;
-        display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px;
-        padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+        display: flex; flex-wrap: nowrap; justify-content: center; align-items: center;
+        gap: clamp(4px, 1.2vw, 10px);
+        padding: clamp(6px, 1.5vw, 12px) clamp(6px, 2vw, 16px) calc(clamp(6px, 1.5vw, 12px) + env(safe-area-inset-bottom));
         white-space: nowrap;
         background: linear-gradient(#2a0a14f2, #160610f7);
         border-top: 2px solid var(--brass);
         box-shadow: 0 -1px 0 #5a4520 inset, 0 -12px 30px #00000080;
-        font: 400 16px var(--display); letter-spacing: 0.03em; font-variant-numeric: tabular-nums;
+        font: 400 clamp(11px, 2.4vw, 16px) var(--display); letter-spacing: 0.03em; font-variant-numeric: tabular-nums;
       }
-      .actions .n { font: 700 20px var(--text); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+      .actions .n { font: 700 1.25em var(--text); font-variant-numeric: tabular-nums; letter-spacing: 0; }
       .actions[hidden] { display: none; }
       .actions button {
-        appearance: none; cursor: pointer; min-width: 64px; height: 46px; padding: 0 20px;
+        appearance: none; cursor: pointer; flex: 0 1 auto; min-width: 0;
+        height: clamp(34px, 8vw, 46px); padding: 0 clamp(8px, 2.2vw, 20px);
         color: var(--cream); font: inherit;
         border: 1px solid var(--brass); border-radius: 4px;
         background: #3a2a18;
@@ -244,24 +272,18 @@
         font: 600 11px var(--text); color: var(--brass); border: 1px solid #c9a24a80; border-radius: 3px; vertical-align: 1px;
       }
       .actions .fold { background: #6e1420; }
-      .actions .call { background: #1f5f3a; min-width: 130px; font-variant-numeric: tabular-nums; }
-      .actions .raise { background: #8a6a1c; min-width: 110px; }
-      .actions .show { background: #2a3a6e; }
-      .actions .step { min-width: 46px; padding: 0; font: 700 24px var(--text); }
-      .actions .amount { min-width: 120px; color: var(--gold); background: #1a0810; cursor: default; font: 700 20px var(--text); font-variant-numeric: tabular-nums; }
+      .actions .call { background: #1f5f3a; }
+      .actions .raise { background: #8a6a1c; }
+      .actions .show { background: #2a3a6e; position: absolute; right: clamp(6px, 2vw, 16px); bottom: calc(100% + 8px); } /* above the bar, so the row stays one line */
+      .actions .step { padding: 0 clamp(8px, 2vw, 14px); font: 700 1.4em var(--text); }
+      .actions .amount { color: var(--gold); background: #1a0810; cursor: default; font: 700 1.25em var(--text); font-variant-numeric: tabular-nums; }
       .actions .clock {
-        min-width: 90px; margin-right: 14px; color: var(--gold); background: transparent; border-color: transparent;
-        box-shadow: none; cursor: default; font: 700 26px var(--text); font-variant-numeric: tabular-nums;
+        margin-right: clamp(0px, 1vw, 14px); padding: 0 clamp(4px, 1vw, 10px); color: var(--gold); background: transparent; border-color: transparent;
+        box-shadow: none; cursor: default; font: 700 1.6em var(--text); font-variant-numeric: tabular-nums;
       }
       .actions .clock.bank { color: #ff9a6b; }
       .actions .clock:empty { display: none; }
-      @media (max-width: 640px) {
-        .actions { gap: 6px; padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); font-size: 13px; }
-        .actions button { height: 40px; padding: 0 12px; min-width: 0; }
-        .actions .call, .actions .raise, .actions .amount { min-width: 0; }
-        .actions .clock { margin-right: 0; font-size: 20px; }
-        .actions button[data-key]::after { display: none; }
-      }
+      @media (max-width: 760px) { .actions button[data-key]::after { display: none; } }
     </style>
   </head>
   <body>

@@ -4,14 +4,16 @@ import type { Avatar } from "./avatars.ts";
 /**
  * A player's look: a base character, and what the creator lets them change on it. The
  * Rocketbox characters keep their clothing in one body texture, so an outfit colour is a
- * repaint of that texture (as the dealer's suit is), skin a tint of it and of the head,
- * hair the colour of the hair mesh, height a scale of the whole body.
+ * repaint of that texture (as the dealer's suit is), skin a tint of it and of the head, height
+ * a scale of the whole body. Hair is painted into the head texture on these characters, and the
+ * separate alpha mesh is a hairnet or lashes on some of them, so hair colour waits for a
+ * per-character repaint; the field stays so stored profiles keep reading.
  */
 export type Look = {
   model: number;
   /** 0 light to 1 dark. */
   skin: number;
-  /** Hair colour, hex. */
+  /** Hair colour, hex. Kept, not applied yet (see above). */
   hair: string;
   /** Outfit colour, hex. */
   outfit: string;
@@ -33,12 +35,6 @@ export function applyLook(avatar: Avatar, look: Look) {
     const material = mesh.material as THREE.MeshStandardMaterial;
     if (material.name.endsWith("_body")) repaintBody(mesh, material, skinScale, outfit);
     else if (material.name.endsWith("_head")) material.color.setScalar(skinScale);
-    else if (material.name.endsWith("_opacity")) {
-      // The hair mesh: its texture is dark, so a light colour is lifted with a little glow as well.
-      // ponytail: hair painted into the head texture (some characters) is not recoloured yet.
-      material.color.set(look.hair);
-      material.emissive.set(look.hair).multiplyScalar(0.35);
-    }
   });
   avatar.root.scale.setScalar(look.height);
 }

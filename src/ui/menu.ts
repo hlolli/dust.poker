@@ -30,13 +30,13 @@ export function showMenu(): Promise<{ profile: Profile; mode: "practice" }> {
           <div class="plates"></div>
         </section>
         <section class="line practice">
-          <button class="show go" type="button">
+          <button class="listing go" type="button">
             <span class="title">Practice table</span>
             <span class="sub">Five bots, nothing at stake, the referee runs in this browser</span>
           </button>
         </section>
         <section class="line live unlit">
-          <div class="show">
+          <div class="listing">
             <span class="title">Live table</span>
             <span class="sub status">Real chips, refereed on Midnight. Connect Lace to see the tables.</span>
           </div>

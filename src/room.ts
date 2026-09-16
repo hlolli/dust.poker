@@ -4,7 +4,7 @@ import { VRButton } from "three/addons/webxr/VRButton.js";
 import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
 import type { Action } from "./referee/types.ts";
 import { createSeat } from "./scene/avatar.ts";
-import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseHands, poseSeated, poseStanding } from "./scene/avatars.ts";
+import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseHands, poseSeated, poseStanding, poseWalking } from "./scene/avatars.ts";
 import { BAR, BARTENDER_POSE, createBar } from "./scene/bar.ts";
 import { attachControls } from "./scene/controls.ts";
 import { deckInHand, dressAsDealer } from "./scene/dealer.ts";
@@ -18,12 +18,17 @@ import { freeze } from "./scene/static.ts";
 import { createTable, DEALER_POSE, EYE_HEIGHT, SEAT_COUNT, seatPose } from "./scene/table.ts";
 import { TableView } from "./scene/table-view.ts";
 import { ActionBar } from "./ui/actions.ts";
+import { HandPanel } from "./ui/hand.ts";
 import type { Profile } from "./ui/profiles.ts";
 
 const YOU = 0;
+/** How much higher than the others you hold your cards: toward the eyes the camera sits in. */
+const LIFT = 0.05;
 const BOT_NAMES = ["Dean", "Frank", "Sammy", "Peggy", "Louis"];
 // Rocketbox characters come out of Blender facing +z; seats face -z, hence the half turn.
 const AVATAR_FACING = Math.PI;
+/** Where you come in: the hall's entrance end, looking down the nave at the table. */
+const ENTRANCE = new THREE.Vector3(0, 0, 5.2);
 
 /**
  * The room: the hall, the table, the bar, the people. The player walks in from the entrance
@@ -73,6 +78,8 @@ export async function enterRoom(profile: Profile) {
   const avatars: (Avatar | null)[] = Array.from({ length: SEAT_COUNT }, () => null);
   /** Camera position inside the rig once seated: your avatar's eyes, or a default seated eye height. */
   const seatedEye = new THREE.Vector3(0, EYE_HEIGHT, 0);
+  /** Your arrival, once your character has loaded; null when you are seated. */
+  let entrance: { avatar: Avatar; t0: number } | null = null;
   let attachCards: ((seat: number, avatar: Avatar) => void) | null = null;
   for (let i = 0; i < SEAT_COUNT; i++) {
     loadAvatar(i === YOU ? yours.url : others[(i - 1) % others.length]!.url)
@@ -81,18 +88,19 @@ export async function enterRoom(profile: Profile) {
         a.root.position.copy(position);
         a.root.rotation.y = yaw + AVATAR_FACING;
         a.root.name = `avatar-${i}`;
-        if (i === YOU) applyLook(a, profile.look);
-        poseSeated(a, 0.5);
         if (i === YOU) {
-          // First person: the camera goes where this body's eyes are, expressed in the rig's
-          // space once the rig has moved to the seat (same position and yaw as the seat pose).
-          const seat = new THREE.Object3D();
-          seat.position.copy(position);
-          seat.rotation.y = yaw;
-          seat.updateMatrixWorld(true);
-          seatedEye.copy(seat.worldToLocal(eyePosition(a)));
-          hideOwnHead(a);
+          // You arrive on foot: standing at the entrance, facing the table, head and all.
+          // The entrance below walks you to the chair and sits you down; the camera follows
+          // behind until you are seated, then steps into your eyes.
+          applyLook(a, profile.look);
+          a.root.position.copy(ENTRANCE);
+          poseWalking(a, 0);
+          scene.add(a.root);
+          avatars[i] = a;
+          entrance = { avatar: a, t0: performance.now() + 300 };
+          return;
         }
+        poseSeated(a, 0.5);
         scene.add(a.root);
         avatars[i] = a;
         attachCards?.(i, a);
@@ -128,7 +136,7 @@ export async function enterRoom(profile: Profile) {
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.05, 50);
   camera.position.y = EYE_HEIGHT;
   rig.add(camera);
-  rig.position.set(0, 0, 5.2); // at the hall's entrance end, looking down the nave at the table
+  rig.position.copy(ENTRANCE);
   scene.add(rig);
   // Inspection handles for the browser console; no runtime role.
   Object.assign(window as unknown as Record<string, unknown>, { __scene: scene, __rig: rig, __camera: camera });
@@ -158,15 +166,102 @@ export async function enterRoom(profile: Profile) {
     if (e.key === "m" || e.key === "M") mute.click();
   });
 
-  // Walk from the entrance to the seat, then sit down.
-  let move: { from: THREE.Vector3; to: THREE.Vector3; yawFrom: number; yawTo: number; t0: number; ms: number; then?: () => void } | null = null;
+  // The entrance: a timeline from the moment your character has loaded. Walk to the side of
+  // your chair, pull it out from the table, step in front of it, sit as it slides back under
+  // you, then the camera leaves its place behind you for your eyes and the game begins.
   const seat = seatPose(YOU);
-  move = { from: rig.position.clone(), to: seat.position, yawFrom: rig.rotation.y, yawTo: seat.yaw, t0: performance.now() + 400, ms: 2200, then: () => void sitDown() };
+  const outward = seat.position.clone().normalize(); // from the table centre out through the seat
+  const side = new THREE.Vector3(outward.z, 0, -outward.x); // along the rail, to the chair's side
+  const beside = seat.position.clone().addScaledVector(outward, 0.4).addScaledVector(side, 0.62); // standing beside the chair
+  const pulled = 0.5; // how far the chair comes out
+  const inFront = seat.position.clone().addScaledVector(outward, pulled); // between the pulled chair and the table
+  const facingTable = seat.yaw + AVATAR_FACING;
+  const chair = seats.children[YOU]!;
+  chair.traverse((o) => {
+    o.matrixAutoUpdate = true; // this one chair moves
+    o.matrixWorldAutoUpdate = true;
+  });
+  const chairAt = chair.position.clone();
+  const STEPS = [3.0, 0.7, 0.7, 0.9, 1.0] as const; // walk, pull the chair, step in front of it, sit, into the eyes
+  const smooth = (k: number) => (k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2);
+  let seatedY = 0;
+  let standingY = 0;
+  let walkYaw = 0;
+  let cameraFrom: { position: THREE.Vector3; quaternion: THREE.Quaternion } | null = null;
+  scene.attach(camera); // free during the entrance; back into the rig once seated
+  function entranceFrame(now: number) {
+    if (!entrance) return;
+    const { avatar } = entrance;
+    let t = (now - entrance.t0) / 1000;
+    if (t < 0) t = 0;
+    let stage = 0;
+    while (stage < STEPS.length && t >= STEPS[stage]!) t -= STEPS[stage++]!;
+    const k = stage < STEPS.length ? Math.min(1, t / STEPS[stage]!) : 1;
+    if (stage === 0) {
+      // The walk: from the entrance to beside the chair, facing the way you go, a stride every
+      // 0.55 s and a little bob.
+      const phase = t * (Math.PI * 2 / 0.55);
+      const dir = beside.clone().sub(ENTRANCE);
+      walkYaw = Math.atan2(dir.x, dir.z);
+      avatar.root.rotation.y = walkYaw;
+      avatar.root.position.lerpVectors(ENTRANCE, beside, smooth(k)).setY(Math.abs(Math.sin(phase)) * 0.025);
+      poseWalking(avatar, phase);
+    } else if (stage === 1) {
+      // Pulling the chair out, standing at its side, turning to face the table.
+      poseWalking(avatar, 0);
+      avatar.root.position.copy(beside);
+      avatar.root.rotation.y = THREE.MathUtils.lerp(walkYaw, facingTable, smooth(k));
+      chair.position.copy(chairAt).addScaledVector(outward, pulled * smooth(k));
+    } else if (stage === 2) {
+      // A side step in front of the pulled-out chair.
+      poseWalking(avatar, Math.sin(k * Math.PI) * 0.7);
+      avatar.root.rotation.y = facingTable;
+      avatar.root.position.lerpVectors(beside, inFront, smooth(k));
+    } else if (stage === 3) {
+      // Sitting: the body lowers onto the chair and rides in with it as it slides back under the table.
+      if (!standingY) {
+        standingY = avatar.root.position.y || 0.001;
+        avatar.root.position.copy(inFront);
+        poseSeated(avatar, 0.5);
+        poseHands(avatar, false, LIFT);
+        seatedY = avatar.root.position.y;
+      }
+      const e = smooth(k);
+      avatar.root.position.copy(seat.position).addScaledVector(outward, pulled * (1 - e));
+      avatar.root.position.y = THREE.MathUtils.lerp(standingY, seatedY, Math.min(1, e * 1.4));
+      chair.position.copy(chairAt).addScaledVector(outward, pulled * (1 - e));
+    }
+    const facing = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), avatar.root.rotation.y);
+    // The camera: over your shoulder while you are on your feet, then into your eyes.
+    if (stage < 4) {
+      const head = avatar.root.position.clone().add(new THREE.Vector3(0, 1.45, 0));
+      camera.position.copy(avatar.root.position).addScaledVector(facing, -2.3).add(new THREE.Vector3(0.45, 1.85, 0));
+      camera.lookAt(head);
+    } else {
+      if (!cameraFrom) {
+        cameraFrom = { position: camera.position.clone(), quaternion: camera.quaternion.clone() };
+        rig.position.copy(seat.position);
+        rig.rotation.y = seat.yaw;
+        rig.updateMatrixWorld(true);
+        seatedEye.copy(rig.worldToLocal(eyePosition(avatar)));
+      }
+      const eye = rig.localToWorld(seatedEye.clone());
+      const look = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.35, seat.yaw, 0, "YXZ"));
+      camera.position.lerpVectors(cameraFrom.position, eye, smooth(k));
+      camera.quaternion.slerpQuaternions(cameraFrom.quaternion, look, smooth(k));
+      if (k >= 1) {
+        hideOwnHead(avatar);
+        rig.attach(camera);
+        camera.position.copy(seatedEye);
+        camera.rotation.set(-0.35, 0, 0, "YXZ");
+        entrance = null;
+        void sitDown();
+      }
+    }
+  }
 
   let view: TableView | null = null;
   async function sitDown() {
-    camera.position.copy(seatedEye);
-    camera.rotation.x = -0.35; // look at the felt
     const names = Array.from({ length: SEAT_COUNT }, (_, i) => (i === YOU ? profile.name : BOT_NAMES[i - 1]!));
     // The referee is the compiled contract; its runtime's wasm must be up before it is imported.
     await runtimeReady;
@@ -177,23 +272,32 @@ export async function enterRoom(profile: Profile) {
     const show = () => referee.show().catch(console.warn);
     // Browser: the bar at the bottom of the page. Headset: the rail in front of the seat.
     const actionBar = new ActionBar(act, show);
-    document.body.append(actionBar.el);
+    const hand = new HandPanel();
+    document.body.append(actionBar.el, hand.el);
+    // The hand panel sits just above the bar, whatever the bar's height is at this width.
+    new ResizeObserver(() => (hand.el.style.bottom = `${actionBar.el.offsetHeight + 10}px`)).observe(actionBar.el);
     const rail = new Rail(YOU, act, show, controls.register);
     rail.group.visible = false;
     const inXR = () => {
       rail.group.visible = renderer.xr.isPresenting;
       actionBar.el.hidden = renderer.xr.isPresenting;
+      hand.el.hidden = renderer.xr.isPresenting;
     };
     renderer.xr.addEventListener("sessionstart", inXR);
     renderer.xr.addEventListener("sessionend", inXR);
     scene.add(tableView.group, rail.group);
-    attachCards = (i, avatar) => tableView.attachHoleCards(i, cardAnchor(avatar), (holding) => poseHands(avatar, holding));
+    attachCards = (i, avatar) => {
+      const lift = i === YOU ? LIFT : 0;
+      poseHands(avatar, true, lift); // the anchor is measured from the hands, so pose them first
+      tableView.attachHoleCards(i, cardAnchor(avatar, lift), (holding) => poseHands(avatar, holding, lift));
+    };
     avatars.forEach((a, i) => a && attachCards!(i, a));
     onSelect = rail.onSelect;
     referee.subscribe((s) => {
       tableView.update(s);
       rail.update(s);
       actionBar.update(s);
+      hand.update(s);
       (window as unknown as Record<string, unknown>).__table = s; // inspection handle, like __scene
     });
     Object.assign(window as unknown as Record<string, unknown>, { __referee: referee });
@@ -216,17 +320,7 @@ export async function enterRoom(profile: Profile) {
     fitViewport();
     for (const a of avatars) if (a) idleFace(a, now);
     view?.animate(now);
-    if (move && now >= move.t0) {
-      const k = Math.min(1, (now - move.t0) / move.ms);
-      const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2; // ease in-out
-      rig.position.lerpVectors(move.from, move.to, e);
-      rig.rotation.y = THREE.MathUtils.lerp(move.yawFrom, move.yawTo, e);
-      if (k === 1) {
-        const done = move.then;
-        move = null;
-        done?.();
-      }
-    }
+    entranceFrame(now);
     renderer.render(scene, camera);
   });
 }
