@@ -1,14 +1,16 @@
 import * as THREE from "three";
 import { brass, chrome, velvet } from "./materials.ts";
 import { ROOM } from "./room.ts";
-import { textPlane } from "./text.ts";
+import { Label, textPlane } from "./text.ts";
+
+const PLAQUE = { width: 0.9, font: "bold 110px Georgia, serif", color: "#2a1a08", background: "#c9a24a" };
 
 /**
  * The house sign on the far wall, 1950s marquee: a stepped velvet backplate edged in chrome,
- * a brass sunburst behind glowing script, bulbs all round. And the one door in the menu:
- * the Practice table.
+ * a brass sunburst behind glowing script, bulbs all round. And the two doors in the menu:
+ * the Practice table, and the wallet for a Live one, with a line of status under it.
  */
-export function createSplash(): { group: THREE.Group; practiceDoor: THREE.Mesh } {
+export function createSplash(): { group: THREE.Group; practiceDoor: THREE.Mesh; walletDoor: Label; walletStatus: Label } {
   const g = new THREE.Group();
   g.name = "splash";
   const wallZ = -ROOM.depth / 2 + 0.1;
@@ -75,22 +77,25 @@ export function createSplash(): { group: THREE.Group; practiceDoor: THREE.Mesh }
   marquee.position.set(0, y, wallZ + 1.2);
   g.add(marquee);
 
-  // The door: a brass plaque floating between the player and the table.
-  const practiceDoor = textPlane("PRACTICE TABLE", {
-    width: 0.9,
-    font: "bold 110px Georgia, serif",
-    color: "#2a1a08",
-    background: "#c9a24a",
-  });
-  practiceDoor.position.set(0, 0.95, 2.4);
-  practiceDoor.rotation.x = -0.25;
-  practiceDoor.name = "practice-door";
-  g.add(practiceDoor);
+  // The doors: brass plaques floating between the player and the table.
+  const frame = new THREE.BoxGeometry(0.98, 0.3, 0.03);
+  const plaque = (mesh: THREE.Mesh, y: number, name: string) => {
+    mesh.position.set(0, y, 2.4);
+    mesh.rotation.x = -0.25;
+    mesh.name = name;
+    const back = new THREE.Mesh(frame, brassMat);
+    back.position.set(0, y, 2.38);
+    back.rotation.x = -0.25;
+    g.add(mesh, back);
+  };
+  const practiceDoor = textPlane("PRACTICE TABLE", PLAQUE);
+  plaque(practiceDoor, 0.95, "practice-door");
+  const walletDoor = new Label("CONNECT WALLET", { ...PLAQUE, font: "bold 96px Georgia, serif" });
+  plaque(walletDoor.mesh, 0.6, "wallet-door");
+  const walletStatus = new Label("", { width: 1.8, font: "bold 56px Georgia, serif", color: "#ffe9b0", canvas: [2048, 128] });
+  walletStatus.mesh.position.set(0, 0.38, 2.4);
+  walletStatus.mesh.rotation.x = -0.25;
+  g.add(walletStatus.mesh);
 
-  const plaqueFrame = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.3, 0.03), brassMat);
-  plaqueFrame.position.set(0, 0.95, 2.38);
-  plaqueFrame.rotation.x = -0.25;
-  g.add(plaqueFrame);
-
-  return { group: g, practiceDoor };
+  return { group: g, practiceDoor, walletDoor, walletStatus };
 }

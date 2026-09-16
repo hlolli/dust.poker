@@ -57,7 +57,7 @@ const collect = (t: Table) => {
   await t.call(0, "start_deal");
   await t.call(0, "post_key", 0n);
   await t.call(2, "post_key", 2n);
-  t.now += 60;
+  t.now += 80; // the 60 s keys budget after the 20 s clock slack
   await t.call(2, "expire");
   await t.call(2, "settle_abort");
   if (t.ledger.phase !== Phase.done) throw new Error("the abort did not settle");
@@ -69,7 +69,7 @@ const collect = (t: Table) => {
   await t.foldOut();
   await t.call(0, "post_next_key", 0n);
   await t.call(2, "post_next_key", 2n);
-  t.now += 180;
+  t.now += 200; // the 180 s preparation budget after the slack
   await t.call(2, "expire_next");
   collect(t);
 }

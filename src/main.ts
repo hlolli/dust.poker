@@ -12,6 +12,7 @@ import bot2Url from "./assets/avatars/Business_Male_04.glb";
 import bot3Url from "./assets/avatars/Female_Party_01.glb";
 import bot4Url from "./assets/avatars/Business_Male_06.glb";
 import bot5Url from "./assets/avatars/Female_Party_02.glb";
+import { connect as connectWallet, installed as installedWallets, network as walletNetwork } from "./live/wallet.ts";
 import { attachControls } from "./scene/controls.ts";
 import { type Lounge, startLounge } from "./scene/lounge.ts";
 import { Rail } from "./scene/rail.ts";
@@ -90,7 +91,7 @@ for (let i = 0; i < SEAT_COUNT; i++) {
     .catch((e) => console.warn(`avatar ${i} failed to load`, e));
 }
 
-const { group: splash, practiceDoor } = createSplash();
+const { group: splash, practiceDoor, walletDoor, walletStatus } = createSplash();
 scene.add(splash);
 
 // Nothing above ever moves: world matrices once, then no per-frame matrix work.
@@ -143,7 +144,25 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "m" || e.key === "M") lounge?.setMuted(!lounge.muted);
 });
 
+// The wallet door: Lace's consent dialog, then the address and network it gave us on the
+// status line. Nothing is at stake yet; the Live table is what this connection is for.
+async function openWallet() {
+  const [wallet] = installedWallets();
+  if (!wallet) return walletStatus.set("NO MIDNIGHT WALLET IN THIS BROWSER");
+  walletStatus.set(`${wallet.name}: CONFIRM IN THE WALLET`.toUpperCase());
+  try {
+    const w = await connectWallet(wallet);
+    controls.unregister(walletDoor.mesh);
+    walletDoor.set(`${w.name} CONNECTED`.toUpperCase());
+    walletStatus.set(`${w.networkId}  ${w.address.slice(0, 20)}...${w.address.slice(-8)}`.toUpperCase());
+    Object.assign(window as unknown as Record<string, unknown>, { __wallet: w });
+  } catch (e) {
+    walletStatus.set(`${walletNetwork()}: ${e instanceof Error ? e.message : e}`.toUpperCase());
+  }
+}
+
 onSelect = (hit) => {
+  if (hit === walletDoor.mesh) return void openWallet();
   if (hit !== practiceDoor) return;
   controls.unregister(practiceDoor);
   splash.remove(practiceDoor);
@@ -155,6 +174,7 @@ onSelect = (hit) => {
   moveRigTo(position, yaw, 1800, sitDown);
 };
 controls.register(practiceDoor);
+controls.register(walletDoor.mesh);
 
 async function sitDown() {
   camera.position.copy(seatedEye);
