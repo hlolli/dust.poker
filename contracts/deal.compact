@@ -2,9 +2,11 @@
 // on top of it. See docs/protocol/dealing.md.
 //
 // One deal at a time (pipelining later). Phases:
-//   sit, buy_in  a seat with the maximum buy-in; more chips between deals, up to it
-//   start_deal   idle, done or aborted -> keys; the players are the seats with chips now;
-//                the dealer button moves, the blinds are posted
+//   sit, buy_in  a seat, paying the buy-in and the bond into escrow; more chips between
+//                deals, up to the maximum buy-in
+//   leave        stack and bond back to the player's address, while not in a deal
+//   start_deal   idle or done -> keys; the players are the seats with chips now; the dealer
+//                button moves, the blinds are posted
 //   post_key     keys -> shuffle once every player has posted
 //   shuffle      in seat order; the last one -> holes
 //   shares       the other players' hole positions; once everyone has -> playing, and the
@@ -22,14 +24,18 @@
 //   settle       anyone, once every score is in: pays the pot, side pots included, from a
 //                witnessed split that the circuit checks (no division in Compact) -> done
 //   expire       anyone, once the deadline has passed -> aborted, the seat that owed the
-//                step is recorded for the stakes contract to settle
+//                step recorded
+//   settle_abort anyone: bets go back, the offender's bond and bets go to the players still
+//                in, the offender's remaining stack goes home and their seat is freed -> done
 //   A street whose betting closes moves to release (or showdown after the river); a deal
 //   that folds down to one player pays them and is done.
 //
+// Stakes are one unshielded asset per table, fixed at construction (ADR 0007). The contract
+// keeps its own books: the escrow holds every stack, every pot and a bond per seat.
+//
 // Deadlines are block time in seconds. A caller states `now`; the contract checks it against
 // the block (blockTimeGte, blockTimeLt) to within CLOCK_SLACK and sets the next deadline
-// from it. sit() is a stand-in for seating.compact until the two merge, and its chips are
-// test chips until the escrow of ADR 0007.
+// from it. sit() is a stand-in for seating.compact until the two merge.
 
 import CompactStandardLibrary;
 
@@ -53,15 +59,21 @@ circuit ACT_SECONDS(): Uint<64> { return 30; }
 circuit CLOCK_SLACK(): Uint<64> { return 120; }
 circuit NONE(): Uint<8> { return 255; }
 circuit BIG_BLIND(): Uint<64> { return 2; }
-// Buy-in range, 40 to 100 big blinds: a seat sits down with the maximum and may buy in
-// again between deals up to it. Test chips until the escrow of ADR 0007.
+// Buy-in range, 40 to 100 big blinds: a seat sits down with a stack in it and may buy in
+// again between deals up to the maximum. The bond locked with the seat equals the maximum
+// buy-in (ADR 0006).
 circuit MIN_BUY_IN(): Uint<64> { return 80; }
 circuit MAX_BUY_IN(): Uint<64> { return 200; }
+circuit BOND(): Uint<64> { return MAX_BUY_IN(); }
 
+// The one asset staked at this table.
+export ledger asset: Bytes<32>;
 // Seats: seat -> the player's key point. A player's identity is ecMulGenerator(secret):
 // 360 rows, against 3,900 for the SHA-256 identity in seating.compact, which switches to
 // this at the merge.
 export ledger seat_owner: Map<Uint<8>, JubjubPoint>;
+// seat -> the address stack and bond go back to
+export ledger payout_address: Map<Uint<8>, Bytes<32>>;
 export ledger stack: Vector<6, Uint<64>>;
 
 // The deal in progress.
@@ -119,6 +131,10 @@ witness best_five(): Vector<5, Uint<8>>;
 // level's pot among its winners (slice == share * winners + odd, odd < winners).
 witness split_share(): Vector<6, Uint<64>>;
 witness split_odd(): Vector<6, Uint<64>>;
+// Abort settlement: the offender's bond and bets split equally among the players still in
+// (forfeit == share * players + odd, odd < players).
+witness forfeit_share(): Uint<64>;
+witness forfeit_odd(): Uint<64>;
 
 circuit indices(): Vector<52, Uint<8>> {
   return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
@@ -252,7 +268,8 @@ circuit board_len(st: Uint<8>): Uint<8> {
   return st == 0 ? 0 : (st == 1 ? 3 : (st == 2 ? 4 : 5));
 }
 
-constructor() {
+constructor(token: Bytes<32>) {
+  asset = disclose(token);
   phase = Phase.idle;
   joint_key = identity();
   fresh = fresh_deck();
@@ -263,13 +280,24 @@ constructor() {
   stack = zeros();
 }
 
-// Takes a seat with a test stack. Escrow of a real asset is ADR 0007's work.
-export circuit sit(seat: Uint<8>): [] {
+// The seat is free to change: between deals, or sitting out the one in progress.
+circuit not_dealing(s: Uint<8>): Boolean {
+  const dealing = phase != Phase.idle && phase != Phase.done;
+  return !dealing || !at_b(in_deal, s);
+}
+
+// Takes a seat: the buy-in and the bond come into escrow with the transaction, and the
+// address they go back to is recorded.
+export circuit sit(seat: Uint<8>, address: Bytes<32>, buy: Uint<64>): [] {
   const s = disclose(seat);
+  const b = disclose(buy);
   assert(s < 6, "no such seat");
   assert(!seat_owner.member(s), "seat taken");
+  assert(b >= MIN_BUY_IN() && b <= MAX_BUY_IN(), "buy-in out of range");
+  receiveUnshielded(asset, (b + BOND()) as Uint<128>);
   seat_owner.insert(s, disclose(me()));
-  stack = set_u(stack, s, MAX_BUY_IN());
+  payout_address.insert(s, disclose(address));
+  stack = set_u(stack, s, b);
 }
 
 // Buys in again: adds chips to the caller's stack, up to the maximum buy-in, while the seat
@@ -278,18 +306,38 @@ export circuit buy_in(seat: Uint<8>, amount: Uint<64>): [] {
   const s = disclose(seat);
   const a = disclose(amount);
   owner_check(s);
-  const dealing = phase != Phase.idle && phase != Phase.done && phase != Phase.aborted;
-  assert(!dealing || !at_b(in_deal, s), "in a deal");
+  assert(not_dealing(s), "in a deal");
   const st = at_u(stack, s);
   assert(a > 0 && (st + a) as Uint<64> <= MAX_BUY_IN(), "over the maximum buy-in");
   assert((st + a) as Uint<64> >= MIN_BUY_IN(), "under the minimum buy-in");
+  receiveUnshielded(asset, a as Uint<128>);
   stack = set_u(stack, s, (st + a) as Uint<64>);
+}
+
+circuit pay_out(s: Uint<8>, amount: Uint<64>): [] {
+  sendUnshielded(asset, amount as Uint<128>, right<ContractAddress, UserAddress>(UserAddress { bytes: payout_address.lookup(s) }));
+}
+
+circuit free_seat(s: Uint<8>): [] {
+  seat_owner.remove(s);
+  payout_address.remove(s);
+  stack = set_u(stack, s, 0);
+}
+
+// Leaves the table: stack and bond go back to the player's address. Not during a deal the
+// player is in; the client leaves once it ends (ADR 0007).
+export circuit leave(seat: Uint<8>): [] {
+  const s = disclose(seat);
+  owner_check(s);
+  assert(not_dealing(s), "in a deal");
+  pay_out(s, (at_u(stack, s) + BOND()) as Uint<64>);
+  free_seat(s);
 }
 
 // Anyone may start a deal. The players are whoever is seated with chips; the button moves
 // to the next of them; the blinds go in now, though betting waits for the hole cards.
 export circuit start_deal(claimed_now: Uint<64>): [] {
-  assert(phase == Phase.idle || phase == Phase.done || phase == Phase.aborted, "deal in progress");
+  assert(phase == Phase.idle || phase == Phase.done, "deal in progress");
   const now = disclose(claimed_now);
   check_now(now);
   const st = stack;
@@ -896,10 +944,44 @@ circuit first_without_release(): Uint<8> {
   return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && !f[k] && board_count(k) < need) ? k : acc), NONE(), seats());
 }
 
+// After an abort, anyone: every other player's bets return to their stack; the offender's
+// bond and bets go to the players still in, split equally, odd chips to the first of them
+// clockwise from the dealer; the offender's remaining stack goes back to their address and
+// the seat is freed. The split is a witness anyone computes from the ledger.
+export circuit settle_abort(): [] {
+  assert(phase == Phase.aborted, "no abort to settle");
+  const o = offender;
+  assert(o != NONE(), "no offender recorded");
+  const v = in_deal;
+  const f = folded;
+  const c = total;
+  const eligible = map((i: Uint<8>): Boolean => v[i] && !f[i] && i != o, seats());
+  const n = fold((acc: Uint<64>, e: Boolean): Uint<64> => (e ? (acc + 1) as Uint<64> : acc), 0, eligible);
+  assert(n > 0, "nobody to pay");
+  const forfeit = (BOND() + at_u(c, o)) as Uint<64>;
+  const share = disclose(forfeit_share());
+  const odd = disclose(forfeit_odd());
+  assert(forfeit == ((share * n + odd) as Uint<64>) && odd < n, "bad split");
+  const fd = map((i: Uint<8>): Uint<8> => from_dealer(i), seats());
+  const first = fold((acc: Uint<8>, i: Uint<8>): Uint<8> => ((eligible[i] && (acc == NONE() || fd[i] < at_b_u8(fd, acc))) ? i : acc), NONE(), seats());
+  stack = map((i: Uint<8>): Uint<64> => {
+    const back = (v[i] && i != o) ? c[i] : 0;
+    const won = eligible[i] ? (share + (i == first ? odd : 0)) as Uint<64> : 0;
+    return (stack[i] + back + won) as Uint<64>;
+  }, seats());
+  pay_out(o, at_u(stack, o));
+  free_seat(o);
+  phase = Phase.done;
+}
+
+circuit at_b_u8(v: Vector<6, Uint<8>>, s: Uint<8>): Uint<8> {
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => (k == s ? v[k] : acc), 0 as Uint<8>, seats());
+}
+
 // Anyone may call this once the deadline has passed: the deal aborts and the seat that owed
-// the step is recorded. Bets return and the forfeit is settled by the stakes contract. A
-// player who lets the betting clock run out has posted no shares, so their deal cannot go
-// on without them: it aborts on them, as docs/protocol/dealing.md, Aborts, case 4.
+// the step is recorded; settle_abort then pays. A player who lets the betting clock run out
+// has posted no shares, so their deal cannot go on without them: it aborts on them, as
+// docs/protocol/dealing.md, Aborts, case 4.
 export circuit expire(): [] {
   assert(deadline != 0, "nothing pending");
   assert(blockTimeGte(deadline), "deadline not reached");

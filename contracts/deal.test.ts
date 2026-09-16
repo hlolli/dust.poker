@@ -11,7 +11,7 @@ import {
 import { evaluate } from "../src/poker/hand.ts";
 import { settle as settleTs } from "../src/poker/payout.ts";
 import { Contract, ledger, pureCircuits } from "./build/deal/contract/index.js";
-import { bestFive, boardCards, cardName, holeCards, orderOf, shownCards, splits } from "./client.ts";
+import { bestFive, boardCards, cardName, forfeitSplit, holeCards, PRACTICE_ASSET, shownCards, splits } from "./client.ts";
 
 // Deals executed locally through the referee: seats, phases, turns, deadlines, and the
 // betting of src/poker/deal.test.ts replayed against the contract. No chain, no proofs;
@@ -22,7 +22,12 @@ const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire";
+type Circuit = "sit" | "buy_in" | "leave" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
+type Arg = bigint | bigint[] | Uint8Array;
+const UNTIMED = new Set<Circuit>(["sit", "buy_in", "leave", "expire", "settle", "settle_abort"]);
+/** The payout address of a seat in these tests. */
+const addr = (seat: number) => new Uint8Array(32).fill(seat + 1);
+const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
 const [FOLD, CHECK, CALL, RAISE] = [0n, 0n, 1n, 2n];
 const NONE = 255n;
@@ -59,6 +64,8 @@ function player(permutation: bigint[] = randomPermutation()) {
     best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, p.seat, x)],
     split_share: (ctx) => [ctx.privateState, splits(ctx.ledger).share],
     split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
+    forfeit_share: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).share],
+    forfeit_odd: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).odd],
   });
   return p;
 }
@@ -68,31 +75,41 @@ type Player = ReturnType<typeof player>;
 class Table {
   now = T0;
   state!: State;
+  /** The token effects of the last call: what the transaction must bring in and pay out. */
+  effects!: { unshieldedInputs: Map<unknown, bigint>; unshieldedOutputs: Map<unknown, bigint>; claimedUnshieldedSpends: Map<[unknown, { address?: string }], bigint> };
   constructor(readonly players: Player[]) {}
 
   static async seated(n: number, players = Array.from({ length: n }, () => player())): Promise<Table> {
     const t = new Table(players);
-    t.state = (await players[0]!.contract.initialState(createConstructorContext<PS>({}, coinPublicKey))).currentContractState;
+    t.state = (await players[0]!.contract.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
     for (let i = 0; i < players.length; i++) {
       players[i]!.seat = i;
-      await t.call(i, "sit", BigInt(i));
+      await t.call(i, "sit", BigInt(i), addr(i), 200n);
     }
     return t;
   }
 
   /** Circuits that take the clock get it appended. */
-  async call(seat: number, circuit: Circuit, ...args: (bigint | bigint[])[]): Promise<unknown> {
-    const timed = circuit !== "sit" && circuit !== "buy_in" && circuit !== "expire" && circuit !== "settle";
+  async call(seat: number, circuit: Circuit, ...args: Arg[]): Promise<unknown> {
     const p = this.players[seat]!;
     const ctx = createCircuitContext(circuit, address, coinPublicKey, this.state, {} as PS, undefined, undefined, undefined, this.now);
-    const all = timed ? [...args, BigInt(this.now)] : args;
-    const r = await (p.contract.circuits[circuit] as (c: typeof ctx, ...a: (bigint | bigint[])[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);
+    const all = UNTIMED.has(circuit) ? args : [...args, BigInt(this.now)];
+    const r = await (p.contract.circuits[circuit] as (c: typeof ctx, ...a: Arg[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);
     this.state = r.context.callContext.currentQueryContext.state;
+    this.effects = r.context.callContext.currentQueryContext.effects as typeof this.effects;
     return r.result;
   }
 
+  /** What the last call brought into escrow, and what it paid to an address. */
+  get received(): bigint {
+    return [...this.effects.unshieldedInputs.values()].reduce((a, b) => a + b, 0n);
+  }
+  paidTo(to: Uint8Array): bigint {
+    return [...this.effects.claimedUnshieldedSpends.entries()].filter(([[, who]]) => who.address === hex(to)).reduce((a, [, v]) => a + v, 0n);
+  }
+
   /** A call expected to fail leaves the state alone. */
-  refuses(seat: number, circuit: Circuit, pattern: RegExp, ...args: (bigint | bigint[])[]) {
+  refuses(seat: number, circuit: Circuit, pattern: RegExp, ...args: Arg[]) {
     const before = this.state;
     return expect(this.call(seat, circuit, ...args).finally(() => (this.state = before))).rejects.toThrow(pattern);
   }
@@ -481,6 +498,31 @@ test("a player who does not show in time aborts the deal on themselves", async (
   expect(t.ledger.offender).toBe(0n);
 }, 60_000);
 
+test("stakes: buy-in and bond come in with the seat, stack and bond go home on leaving", async () => {
+  const t = await Table.seated(2);
+  expect(t.received).toBe(400n); // the last sit: 200 buy-in and the 200 bond
+  await t.call(0, "leave", 0n);
+  expect(t.paidTo(addr(0))).toBe(400n);
+  expect(t.ledger.seat_owner.member(0n)).toBe(false);
+  expect(t.ledger.stack[0]).toBe(0n);
+  await t.refuses(0, "leave", /empty seat/, 0n);
+  // The seat can be taken again, with any buy-in in range.
+  await t.refuses(0, "sit", /out of range/, 0n, addr(0), 79n);
+  await t.refuses(0, "sit", /out of range/, 0n, addr(0), 201n);
+  await t.call(0, "sit", 0n, addr(0), 80n);
+  expect(t.received).toBe(280n);
+  expect(t.ledger.stack[0]).toBe(80n);
+  await t.call(0, "buy_in", 0n, 50n);
+  expect(t.received).toBe(50n);
+  // Not while in a deal.
+  await t.dealt();
+  await t.refuses(0, "leave", /in a deal/, 0n);
+  await t.call(0, "act_out", 0n, FOLD, 0n);
+  expect(t.ledger.phase).toBe(Phase.done);
+  await t.call(1, "leave", 1n);
+  expect(t.paidTo(addr(1))).toBe(BigInt(200 + 1 + 200)); // stack after winning the small blind, plus the bond
+}, 60_000);
+
 test("buying in again: between deals or while sitting out, up to the maximum", async () => {
   const t = await Table.seated(3);
   await t.refuses(0, "buy_in", /over the maximum/, 0n, 1n); // already at the maximum
@@ -573,6 +615,17 @@ test("a missed deadline aborts the deal and names the seat that owed the step", 
   expect(keys.ledger.phase).toBe(Phase.aborted);
   expect(keys.ledger.offender).toBe(1n);
   await keys.refuses(0, "expire", /nothing pending/);
+  await keys.refuses(0, "start_deal", /deal in progress/);
+
+  // Settlement: bets back, the offender's bond and small blind (201) split 100 each with
+  // the odd chip to seat 2, the first still in clockwise from the dealer; the offender's
+  // 199 go home and the seat is freed.
+  await keys.call(2, "settle_abort");
+  expect(keys.ledger.phase).toBe(Phase.done);
+  expect(keys.ledger.stack.slice(0, 3)).toEqual([300n, 301n, 0n].map((v, i) => [300n, 0n, 301n][i]!));
+  expect(keys.paidTo(addr(1))).toBe(199n);
+  expect(keys.ledger.seat_owner.member(1n)).toBe(false);
+  await keys.refuses(0, "settle_abort", /no abort to settle/);
 
   // Shuffle phase: the seat whose turn it is.
   for (let i = 0; i < 3; i++) await t.call(i, "post_key", BigInt(i));
@@ -582,11 +635,13 @@ test("a missed deadline aborts the deal and names the seat that owed the step", 
   t.now += 240;
   await t.call(2, "expire");
   expect(t.ledger.offender).toBe(1n);
+  await t.call(2, "settle_abort");
 
-  // An aborted deal can be restarted.
+  // The two left can deal again.
   await t.call(2, "start_deal");
   expect(t.ledger.phase).toBe(Phase.keys);
   expect(t.ledger.deal_no).toBe(2n);
+  expect(t.ledger.n_players).toBe(2n);
 }, 60_000);
 
 test("the betting clock: a player who does not act in time aborts the deal on themselves", async () => {

@@ -1,5 +1,5 @@
 import { ContractState, createCircuitContext, createConstructorContext, dummyContractAddress } from "@midnight-ntwrk/compact-runtime";
-import { bestFive, cardName, holeCards, openCard, shownCards, splits } from "../../contracts/client.ts";
+import { bestFive, cardName, forfeitSplit, holeCards, openCard, PRACTICE_ASSET, shownCards, splits } from "../../contracts/client.ts";
 import { Contract, ledger, type Ledger } from "../../contracts/build/deal/contract/index.js";
 import type { Card } from "../poker/cards.ts";
 import { botAction } from "../poker/bot.ts";
@@ -23,7 +23,9 @@ export interface ContractOptions {
 
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle";
+type Circuit = "sit" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "settle_abort";
+type Arg = bigint | bigint[] | Uint8Array;
+const UNTIMED = new Set<Circuit>(["sit", "buy_in", "settle", "settle_abort"]);
 const MIN_BUY_IN = 80;
 const MAX_BUY_IN = 200;
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
@@ -70,7 +72,14 @@ class Seat {
       best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, this.index, this.x)],
       split_share: (ctx) => [ctx.privateState, splits(ctx.ledger).share],
       split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
+      forfeit_share: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).share],
+      forfeit_odd: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).odd],
     });
+  }
+
+  /** Where this seat's stack and bond go back to. Practice chips go nowhere real. */
+  get address(): Uint8Array {
+    return new Uint8Array(32).fill(this.index + 1);
   }
 }
 
@@ -102,8 +111,8 @@ export class ContractReferee implements Referee {
 
   async start() {
     const first = this.seats.find((s) => s)!;
-    this.state = (await first.contract.initialState(createConstructorContext<PS>({}, coinPublicKey))).currentContractState;
-    for (const s of this.seats) if (s) await this.call(s.index, "sit", BigInt(s.index));
+    this.state = (await first.contract.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
+    for (const s of this.seats) if (s) await this.call(s.index, "sit", BigInt(s.index), s.address, BigInt(MAX_BUY_IN));
     this.publish();
     await this.nextDeal();
   }
@@ -145,12 +154,12 @@ export class ContractReferee implements Referee {
     return ledger(s instanceof ContractState ? s.data : s);
   }
 
-  private async call(seat: number, circuit: Circuit, ...args: (bigint | bigint[])[]): Promise<unknown> {
+  private async call(seat: number, circuit: Circuit, ...args: Arg[]): Promise<unknown> {
     const now = Math.floor(Date.now() / 1000);
     const ctx = createCircuitContext(circuit, address, coinPublicKey, this.state!, {} as PS, undefined, undefined, undefined, now);
-    const all = circuit === "sit" || circuit === "buy_in" || circuit === "settle" ? args : [...args, BigInt(now)];
+    const all = UNTIMED.has(circuit) ? args : [...args, BigInt(now)];
     const contract = this.seats[seat]!.contract;
-    const r = await (contract.circuits[circuit] as (c: typeof ctx, ...a: (bigint | bigint[])[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);
+    const r = await (contract.circuits[circuit] as (c: typeof ctx, ...a: Arg[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);
     this.state = r.context.callContext.currentQueryContext.state;
     return r.result;
   }
@@ -203,7 +212,7 @@ export class ContractReferee implements Referee {
     // Practice chips are free, but results should still show: a seat buys back in to the
     // maximum only once it has dropped under the minimum buy-in.
     for (const seat of this.seats) {
-      if (!seat) continue;
+      if (!seat || !this.ledger.seat_owner.member(BigInt(seat.index))) continue; // an evicted seat stays empty
       const stack = Number(this.ledger.stack[seat.index]);
       if (stack < MIN_BUY_IN) await this.call(seat.index, "buy_in", BigInt(seat.index), BigInt(MAX_BUY_IN - stack));
     }
@@ -296,8 +305,11 @@ export class ContractReferee implements Referee {
             for (const s of live) if (!l.scores.member(BigInt(s))) await this.call(s, "show_hand", BigInt(s));
             await this.call(live[0]!, "settle");
             break;
+          case Phase.aborted:
+            await this.call(this.seats.findIndex((s) => s && l.seat_owner.member(BigInt(s.index))), "settle_abort");
+            break;
           default: {
-            // done or aborted: say who won, pause, deal again.
+            // done: say who won, pause, deal again.
             this.finishDeal();
             this.publish();
             this.timer = setTimeout(() => {
@@ -317,8 +329,8 @@ export class ContractReferee implements Referee {
 
   private finishDeal() {
     const l = this.ledger;
-    if (l.phase === Phase.aborted) {
-      this.message = `Deal aborted: ${this.names[Number(l.offender)] ?? "someone"} did not act in time`;
+    if (Number(l.offender) !== 255) {
+      this.message = `Deal aborted: ${this.names[Number(l.offender)] ?? "someone"} did not act in time and leaves the table`;
       return;
     }
     // Won = stack now, less what it was before the deal, plus what went into the pot.

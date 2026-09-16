@@ -15,7 +15,7 @@ import {
   proofDataIntoSerializedPreimage,
 } from "@midnight-ntwrk/compact-runtime";
 import { Contract } from "../contracts/build/deal/contract/index.js";
-import { bestFive, splits } from "../contracts/client.ts";
+import { bestFive, forfeitSplit, PRACTICE_ASSET, splits } from "../contracts/client.ts";
 
 const root = `${import.meta.dir}/..`;
 const { values: args } = parseArgs({
@@ -104,25 +104,29 @@ const contractFor = (seat: number) => {
     best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, seat, x)],
     split_share: (ctx) => [ctx.privateState, splits(ctx.ledger).share],
     split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
+    forfeit_share: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).share],
+    forfeit_odd: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).odd],
   });
 };
 const [a, b] = [contractFor(0), contractFor(1)];
 const now = 1_700_000_000;
+const addr = (seat: number) => new Uint8Array(32).fill(seat + 1);
 
 // Run the circuits locally to get the proof preimages, in the order a deal takes them;
 // player A's calls are the ones proved.
-let state: Parameters<typeof createCircuitContext>[3] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey))).currentContractState;
+let state: Parameters<typeof createCircuitContext>[3] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
 const preimages = new Map<string, Uint8Array>();
-async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release" | "show_hand" | "settle", ...z: (bigint | bigint[])[]) {
+type Arg = bigint | bigint[] | Uint8Array;
+async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release" | "show_hand" | "settle", ...z: Arg[]) {
   const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS, undefined, undefined, undefined, now);
-  const r = await (contract.circuits[circuit] as (c: typeof ctx, ...y: (bigint | bigint[])[]) => Promise<any>)(ctx, ...z);
+  const r = await (contract.circuits[circuit] as (c: typeof ctx, ...y: Arg[]) => Promise<any>)(ctx, ...z);
   state = r.context.callContext.currentQueryContext.state;
   // The root circuit's proof data is the last entry of the call trace (depth-first order).
   const pd = r.context.callProofDataTrace.at(-1)!;
   if (contract === a) preimages.set(circuit, proofDataIntoSerializedPreimage(pd.input, pd.output, pd.publicTranscript, pd.privateTranscriptOutputs, circuit));
 }
-await run(a, "sit", 0n);
-await run(b, "sit", 1n);
+await run(a, "sit", 0n, addr(0), 200n);
+await run(b, "sit", 1n, addr(1), 200n);
 await run(a, "start_deal", BigInt(now));
 await run(a, "post_key", 0n, BigInt(now));
 await run(b, "post_key", 1n, BigInt(now));

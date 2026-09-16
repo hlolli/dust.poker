@@ -6,6 +6,10 @@ status: proposed
 
 Stacks and bonds are escrowed by the contract as an unshielded asset through the standard library's `receiveUnshielded` / `sendUnshielded`. Until the protocol, performance, disconnect economics and legal position have been reviewed, that asset is a valueless test token. The asset is fixed per table while any funds are escrowed. Withdrawal pays out only funds not committed to an unresolved deal, and a seated player's leave takes effect when the current deal ends. Shielded NIGHT is not assumed to be available as a drop-in; capabilities are verified against the standard library before use.
 
+## Consequences
+
+- Done 2026-09-16: the asset is fixed at construction; `sit` and `buy_in` receive, `leave` sends stack plus bond, `settle_abort` returns bets and pays the forfeit (`docs/protocol/dealing.md`, Stakes). "Leave takes effect at the end of the current deal" is enforced as "leave is refused during a deal the player is in"; the client waits. The contract keeps its own balance books; checking them against the chain's balance is left to the wallet integration.
+
 ## Considered options
 
 - Shielded stakes: private stack sizes, but poker stacks are public by watching bets, and the shielded coin machinery is a cost with no payoff here.

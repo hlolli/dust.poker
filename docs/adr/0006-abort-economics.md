@@ -10,4 +10,5 @@ Betting has its own clock (30 s plus a 30 s time bank per deal, check-else-fold)
 
 - A seat locks twice the maximum buy-in in capital. Acceptable for the test prototype; to be revisited in the economics review.
 - Recovery transactions are permissionless: the ledger authorizes, anyone submits and pays.
+- Done 2026-09-16: `settle_abort` returns the others' bets, splits the offender's bond and bets among the players still in, sends the offender's remaining stack home and frees their seat. An offender therefore leaves the table; a fresh bond comes with sitting down again.
 - Amended 2026-09-15, with betting in the contract: a betting-clock expiry cannot check-or-fold the player, because a fold must carry their board shares and an absent player has posted none. Expiry aborts the deal on that player (case 4). Check-else-fold becomes the client's job, an automatic fold transaction before the deadline.

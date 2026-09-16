@@ -7,6 +7,11 @@ import type { Ledger } from "./build/deal/contract/index.js";
 // choosing the five to show, proposing the pot split. Witnesses for show_hand and settle
 // come from here; tests use it to check the contract against src/poker.
 
+/** The bond every seat locks: the maximum buy-in (ADR 0006). */
+export const BOND = 200n;
+/** The Practice table's asset: test chips nobody can spend elsewhere. */
+export const PRACTICE_ASSET = new Uint8Array(32).fill(0xdd);
+
 /** Card index k (suit * 13 + rank, suits c d h s) as a card name; the contract's convention. */
 const CARDS: Card[] = fullDeck();
 export const cardName = (k: number): Card => CARDS[k]!;
@@ -64,6 +69,15 @@ export function bestFive(l: Ledger, seat: number, x: bigint): bigint[] {
   const seven = [...holeCards(l, seat, x), ...boardCards(l)];
   const names = seven.map(cardName);
   return evaluate(names).best.map((card) => BigInt(names.indexOf(card)));
+}
+
+/** Witness for settle_abort: the offender's bond and bets split among the players still in. */
+export function forfeitSplit(l: Ledger): { share: bigint; odd: bigint } {
+  const o = Number(l.offender);
+  const n = BigInt(seats.filter((i) => l.in_deal[i] && !l.folded[i] && i !== o).length);
+  if (n === 0n) return { share: 0n, odd: 0n };
+  const forfeit = BOND + l.total[o]!;
+  return { share: forfeit / n, odd: forfeit % n };
 }
 
 /**

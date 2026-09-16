@@ -144,6 +144,15 @@ Done (2026-09-15): `src/referee/contract.ts` is the Practice referee. It runs th
 
 Valueless test assets only. One unshielded asset per table, fixed while any funds are escrowed. The contract escrows stacks and bonds; `leave()` pays out only what is not committed to an unresolved deal, and takes effect at the end of the current deal for a seated player. Capabilities verified against the standard library (`receiveUnshielded`, `sendUnshielded`, `unshieldedBalance*`); shielded NIGHT is not assumed to exist as a drop-in.
 
+Done (2026-09-16), in `contracts/deal.compact`:
+
+- The asset is a constructor argument (`Bytes<32>`, the unshielded token type) and never changes. Standard library signatures as found: `receiveUnshielded(token, amount: Uint<128>)`, `sendUnshielded(token, amount, Either<ContractAddress, UserAddress>)`, `unshieldedBalance(token)`.
+- `sit(seat, address, buy)` takes `buy + BOND` into escrow (the transaction must carry that unshielded input) and records the address stack and bond go back to; `buy_in` takes its amount in. `leave(seat)` sends stack plus bond to the address and frees the seat, only while the seat is not in a deal: the rule "takes effect at the end of the current deal" is the client's to keep (leave once the deal is done), not a queued state in the contract.
+- Aborts settle in `settle_abort`, by anyone: every other player's bets return to their stack; the offender's bond and bets go to the players still in, split equally, odd chips to the first of them clockwise from the dealer (the split is a witness the circuit checks, as in `settle`); the offender's remaining stack is sent to their address and their seat is freed. So an offender leaves the table, which is also how the bond stays equal to the maximum buy-in for every seated player. `start_deal` refuses until an abort is settled.
+- The contract keeps its own books (stacks, pots, one bond per occupied seat); `unshieldedBalance` is not consulted. The escrow therefore holds `sum(stack) + sum(total) + seats * BOND` at all times.
+- Locally (tests, Practice), `receiveUnshielded` records an expected input and `sendUnshielded` an expected output and UTXO; nothing is checked against a balance, so the Practice table plays with a token nobody holds. Costs: `sit` 686 rows, `buy_in` 730, `leave` 727, `settle_abort` 1,617, `expire` 2,395 (k=12).
+- Not done: `unshieldedBalance*` checks against the real balance, and the on-chain assembly of transactions that carry the inputs (midnight-js, with the wallet). Both belong to the wallet integration.
+
 ## Benchmark plan
 
 Measure the complete deal, not one circuit:
