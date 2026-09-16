@@ -106,6 +106,11 @@ const contractFor = (seat: number) => {
     split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
     forfeit_share: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).share],
     forfeit_odd: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).odd],
+    // The next deck's preparation is not benchmarked here: its circuits mirror post_key and shuffle.
+    next_deck_key: (ctx) => [ctx.privateState, x],
+    next_permuted: (ctx) => [ctx.privateState, permutation.map((p) => ctx.ledger.next_deck[Number(p)]!)],
+    prep_forfeit_share: (ctx) => [ctx.privateState, 0n],
+    prep_forfeit_odd: (ctx) => [ctx.privateState, 0n],
   });
 };
 const [a, b] = [contractFor(0), contractFor(1)];

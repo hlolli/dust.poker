@@ -71,6 +71,14 @@ export function bestFive(l: Ledger, seat: number, x: bigint): bigint[] {
   return evaluate(names).best.map((card) => BigInt(names.indexOf(card)));
 }
 
+/** Witness for expire_next: the bond of whoever owes the next deck a step, split among its other players. */
+export function prepForfeitSplit(l: Ledger): { share: bigint; odd: bigint } {
+  const o = Number(l.next_prep) === 1 ? seats.find((i) => l.next_in_deal[i] && !l.next_has_key[i]) : Number(l.next_turn);
+  const n = BigInt(seats.filter((i) => l.next_in_deal[i] && i !== o && l.seat_owner.member(BigInt(i))).length);
+  if (n === 0n) return { share: 0n, odd: 0n };
+  return { share: BOND / n, odd: BOND % n };
+}
+
 /** Witness for settle_abort: the offender's bond and bets split among the players still in. */
 export function forfeitSplit(l: Ledger): { share: bigint; odd: bigint } {
   const o = Number(l.offender);

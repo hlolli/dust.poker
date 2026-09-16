@@ -11,7 +11,7 @@ import {
 import { evaluate } from "../src/poker/hand.ts";
 import { settle as settleTs } from "../src/poker/payout.ts";
 import { Contract, ledger, pureCircuits } from "./build/deal/contract/index.js";
-import { bestFive, boardCards, cardName, forfeitSplit, holeCards, PRACTICE_ASSET, shownCards, splits } from "./client.ts";
+import { bestFive, boardCards, cardName, forfeitSplit, holeCards, openCard, PRACTICE_ASSET, prepForfeitSplit, shownCards, splits } from "./client.ts";
 
 // Deals executed locally through the referee: seats, phases, turns, deadlines, and the
 // betting of src/poker/deal.test.ts replayed against the contract. No chain, no proofs;
@@ -22,9 +22,12 @@ const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "join" | "buy_in" | "leave" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
+type Circuit =
+  | "join" | "buy_in" | "leave" | "start_deal" | "post_key" | "shuffle" | "post_next_key" | "shuffle_next" | "expire_next"
+  | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
 type Arg = bigint | bigint[] | Uint8Array;
 const UNTIMED = new Set<Circuit>(["join", "buy_in", "leave", "expire", "settle", "settle_abort"]);
+const Prep = { none: 0, keys: 1, shuffle: 2, ready: 3 };
 /** The payout address of a seat in these tests. */
 const addr = (seat: number) => new Uint8Array(32).fill(seat + 1);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
@@ -51,21 +54,26 @@ function randomPermutation(): bigint[] {
 
 function player(permutation: bigint[] = randomPermutation()) {
   const secret = randomScalar();
-  const x = randomScalar();
   const blinding = Array.from({ length: 52 }, randomScalar);
-  const p = { x, seat: -1, contract: null as unknown as Contract<PS> };
+  // Two deck keys: this deal's and the one the next deck is being prepared with. They
+  // rotate when a deal starts (see Table.call).
+  const p = { x: randomScalar(), nextX: randomScalar(), seat: -1, contract: null as unknown as Contract<PS> };
   p.contract = new Contract<PS>({
     player_secret: (ctx) => [ctx.privateState, secret],
-    deck_key: (ctx) => [ctx.privateState, x],
+    deck_key: (ctx) => [ctx.privateState, p.x],
+    next_deck_key: (ctx) => [ctx.privateState, p.nextX],
     // The circuit takes the deck already in secret order; the permutation itself stays here.
     permuted: (ctx) => [ctx.privateState, permutation.map((k) => ctx.ledger.deck[Number(k)]!)],
+    next_permuted: (ctx) => [ctx.privateState, permutation.map((k) => ctx.ledger.next_deck[Number(k)]!)],
     blinding: (ctx) => [ctx.privateState, blinding],
-    // Showdown witnesses, computed from the ledger as a client would.
-    best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, p.seat, x)],
+    // Showdown and settlement witnesses, computed from the ledger as a client would.
+    best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, p.seat, p.x)],
     split_share: (ctx) => [ctx.privateState, splits(ctx.ledger).share],
     split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
     forfeit_share: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).share],
     forfeit_odd: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).odd],
+    prep_forfeit_share: (ctx) => [ctx.privateState, prepForfeitSplit(ctx.ledger).share],
+    prep_forfeit_odd: (ctx) => [ctx.privateState, prepForfeitSplit(ctx.ledger).odd],
   });
   return p;
 }
@@ -98,7 +106,19 @@ class Table {
     const r = await (p.contract.circuits[circuit] as (c: typeof ctx, ...a: Arg[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);
     this.state = r.context.callContext.currentQueryContext.state;
     this.effects = r.context.callContext.currentQueryContext.effects as typeof this.effects;
+    if (circuit === "start_deal") this.rotateKeys();
     return r.result;
+  }
+
+  /** A deal started: the key each player prepared the next deck with becomes this deal's key
+   *  (or a fresh one, when the deal starts from the keys), and a fresh one is drawn for the
+   *  next preparation. What every client does after start_deal. */
+  rotateKeys() {
+    const prepared = this.ledger.phase === Phase.holes;
+    for (const p of this.players) {
+      p.x = prepared ? p.nextX : randomScalar();
+      p.nextX = randomScalar();
+    }
   }
 
   /** What the last call brought into escrow, and what it paid to an address. */
@@ -119,17 +139,32 @@ class Table {
     return ledger(this.state);
   }
 
-  /** Runs keys, shuffles and hole shares: the deal is ready to bet on. */
+  /** Runs keys and shuffles (unless a prepared deck served) and hole shares: the deal is ready to bet on. */
   async dealt() {
-    const n = this.players.length;
     await this.call(0, "start_deal");
-    for (let i = 0; i < n; i++) await this.call(i, "post_key", BigInt(i));
-    for (let i = 0; i < n; i++) await this.call(i, "shuffle", BigInt(i));
-    for (let j = 0; j < n; j++) {
-      const others = Array.from({ length: n }, (_, i) => i).filter((i) => i !== j).flatMap((i) => [2 * i, 2 * i + 1]);
+    const l = this.ledger;
+    const players = seatsOf(l);
+    if (l.phase === Phase.keys) {
+      for (const i of players) await this.call(i, "post_key", BigInt(i));
+      for (const i of players) await this.call(i, "shuffle", BigInt(i));
+    }
+    for (const j of players) {
+      const others = players.filter((i) => i !== j).flatMap((i) => [2 * players.indexOf(i), 2 * players.indexOf(i) + 1]);
       await this.call(j, "shares", BigInt(j), ten(others));
     }
     expect(this.ledger.phase).toBe(Phase.playing);
+  }
+
+  /** The next deck: everyone in its preparation posts a key, then shuffles in turn. */
+  async prepare() {
+    const l = this.ledger;
+    const players = [0, 1, 2, 3, 4, 5].filter((i) => l.next_in_deal[i]);
+    for (const i of players) if (!l.next_has_key[i]) await this.call(i, "post_next_key", BigInt(i));
+    while (this.ledger.next_prep === Prep.shuffle) {
+      const s = Number(this.ledger.next_turn);
+      await this.call(s, "shuffle_next", BigInt(s));
+    }
+    expect(this.ledger.next_prep).toBe(Prep.ready);
   }
 
   /** Board positions for this table: the flop, turn and river slots. */
@@ -138,11 +173,12 @@ class Table {
     return street === 1 ? [holes, holes + 1, holes + 2] : street === 2 ? [holes + 3] : [holes + 4];
   }
 
-  /** Everyone checks the street down, then everyone still in releases the next one. */
+  /** Everyone calls or checks the street down, then everyone still in releases the next one. */
   async checkAndRelease() {
     while (this.ledger.phase === Phase.playing) {
-      const s = Number(this.ledger.to_act);
-      await this.call(s, "act", BigInt(s), CHECK, 0n);
+      const l = this.ledger;
+      const s = Number(l.to_act);
+      await this.call(s, "act", BigInt(s), l.bet[s]! < l.current_bet ? CALL : CHECK, 0n);
     }
     while (this.ledger.phase === Phase.release) {
       const l = this.ledger;
@@ -151,6 +187,15 @@ class Table {
       const s = seatsOf(l).find((i) => !l.folded[i] && !released(i))!;
       await this.call(s, "release", BigInt(s));
     }
+  }
+
+  /** Whoever is to act folds, until the deal is done. */
+  async foldOut() {
+    while (this.ledger.phase === Phase.playing) {
+      const s = Number(this.ledger.to_act);
+      await this.call(s, "act_out", BigInt(s), FOLD, 0n);
+    }
+    expect(this.ledger.phase).toBe(Phase.done);
   }
 
   /** Hands are being tabled: every player still in shows. */
@@ -524,6 +569,90 @@ test("stakes: buy-in and bond come in with the seat, stack and bond go home on l
   await t.call(1, "leave", 1n);
   expect(t.paidTo(addr(1))).toBe(BigInt(200 + 1 + 200)); // stack after winning the small blind, plus the bond
 }, 60_000);
+
+test("pipelining: the next deck is prepared during a deal and the deal after starts at the hole cards", async () => {
+  const t = await Table.seated(3);
+  await t.dealt(); // deal 1 starts from the keys: nothing was prepared
+  expect(t.ledger.deal_no).toBe(1n);
+  // Meanwhile the deck for deal 2 is prepared by the same three.
+  expect(t.ledger.next_prep).toBe(Prep.keys);
+  expect(t.ledger.next_in_deal.slice(0, 3)).toEqual([true, true, true]);
+  await t.refuses(0, "shuffle_next", /not shuffling the next deck/, 0n);
+  await t.prepare();
+  // Deal 1 ends by folding.
+  await t.call(0, "act_out", 0n, FOLD, 0n);
+  await t.call(1, "act_out", 1n, FOLD, 0n);
+  expect(t.ledger.phase).toBe(Phase.done);
+  // Deal 2 begins at the hole cards, with the prepared deck, and deal 3's preparation begins.
+  await t.call(2, "start_deal");
+  expect(t.ledger.deal_no).toBe(2n);
+  expect(t.ledger.phase).toBe(Phase.holes);
+  expect(t.ledger.n_players).toBe(3n);
+  expect(t.ledger.next_prep).toBe(Prep.keys);
+  await t.refuses(0, "post_key", /not posting keys/, 0n);
+  for (let j = 0; j < 3; j++) await t.call(j, "shares", BigInt(j), ten([0, 1, 2, 3, 4, 5].filter((p) => p >> 1 !== j)));
+  expect(t.ledger.phase).toBe(Phase.playing);
+  // The cards are real and distinct: every player reads their own, and the board opens once released.
+  const mine = [0, 1, 2].flatMap((s) => holeCards(t.ledger, s, t.players[s]!.x));
+  expect(new Set(mine).size).toBe(6);
+  await t.prepare(); // and deal 3's deck gets ready during deal 2
+  await t.checkAndRelease(); // the button has moved, so the order differs from deal 1
+  expect(t.ledger.street).toBe(1n);
+  expect(new Set([...mine, ...[6, 7, 8].map((p) => openCard(t.ledger, p))]).size).toBe(9); // the flop is open, the rest not yet
+}, 120_000);
+
+test("pipelining: a prepared deck is dropped when one of its players has left or busted, and latecomers sit out", async () => {
+  const t = await Table.seated(3);
+  await t.dealt();
+  await t.prepare();
+  await t.call(0, "act_out", 0n, FOLD, 0n);
+  await t.call(1, "act_out", 1n, FOLD, 0n);
+  // A fourth player joins after the preparation began: not in that deck.
+  const fourth = player();
+  const u = new Table([...t.players, fourth]);
+  u.state = t.state;
+  u.now = t.now;
+  fourth.seat = 3;
+  expect(await u.call(3, "join", addr(3), 200n)).toBe(3n);
+  await u.call(0, "start_deal");
+  expect(u.ledger.phase).toBe(Phase.holes); // the prepared deck serves the original three
+  expect(u.ledger.in_deal.slice(0, 4)).toEqual([true, true, true, false]);
+  expect(u.ledger.next_in_deal.slice(0, 4)).toEqual([true, true, true, true]); // the fourth is in the next one
+  // Deal 2 folds out; the fourth leaves before deal 3: its prepared deck is dropped.
+  for (let j = 0; j < 3; j++) await u.call(j, "shares", BigInt(j), ten([0, 1, 2, 3, 4, 5].filter((p) => p >> 1 !== j)));
+  await u.prepare();
+  await u.foldOut();
+  await u.call(3, "leave", 3n);
+  await u.call(0, "start_deal");
+  expect(u.ledger.phase).toBe(Phase.keys); // from scratch
+  expect(u.ledger.n_players).toBe(3n);
+  expect(u.ledger.next_in_deal.slice(0, 4)).toEqual([true, true, true, false]);
+}, 120_000);
+
+test("pipelining: a player who misses a preparation step is evicted between deals and the preparation restarts", async () => {
+  const t = await Table.seated(3);
+  await t.dealt();
+  await t.call(0, "act_out", 0n, FOLD, 0n);
+  await t.call(1, "act_out", 1n, FOLD, 0n);
+  // Seats 0 and 2 post their next keys; seat 1 never does.
+  await t.call(0, "post_next_key", 0n);
+  await t.call(2, "post_next_key", 2n);
+  await t.refuses(0, "expire_next", /deadline not reached/);
+  t.now += 180;
+  await t.call(2, "expire_next");
+  expect(t.ledger.seat_owner.member(1n)).toBe(false);
+  expect(t.paidTo(addr(1))).toBe(199n); // its stack after the small blind of deal 1
+  expect(t.ledger.stack.slice(0, 3)).toEqual([300n, 0n, 301n]); // the bond, 100 each, plus deal 1's pot to seat 2
+  expect(t.ledger.next_prep).toBe(Prep.keys);
+  expect(t.ledger.next_in_deal.slice(0, 3)).toEqual([true, false, true]);
+  await t.prepare();
+  await t.call(0, "start_deal");
+  expect(t.ledger.phase).toBe(Phase.holes);
+  expect(t.ledger.n_players).toBe(2n);
+  // Not during a deal, whatever the clock says.
+  t.now += 600;
+  await t.refuses(0, "expire_next", /deal in progress/);
+}, 120_000);
 
 test("the referee seats: six fill the table, a seventh is refused, a leaver's seat goes to the next joiner", async () => {
   const t = await Table.seated(6);

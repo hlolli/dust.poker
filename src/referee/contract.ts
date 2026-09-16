@@ -1,5 +1,5 @@
 import { ContractState, createCircuitContext, createConstructorContext, dummyContractAddress } from "@midnight-ntwrk/compact-runtime";
-import { bestFive, cardName, forfeitSplit, holeCards, openCard, PRACTICE_ASSET, shownCards, splits } from "../../contracts/client.ts";
+import { bestFive, cardName, forfeitSplit, holeCards, openCard, PRACTICE_ASSET, prepForfeitSplit, shownCards, splits } from "../../contracts/client.ts";
 import { Contract, ledger, type Ledger } from "../../contracts/build/deal/contract/index.js";
 import type { Card } from "../poker/cards.ts";
 import { botAction } from "../poker/bot.ts";
@@ -24,9 +24,12 @@ export interface ContractOptions {
 
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "join" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "settle_abort";
+type Circuit =
+  | "join" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "post_next_key" | "shuffle_next"
+  | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "settle_abort";
 type Arg = bigint | bigint[] | Uint8Array;
 const UNTIMED = new Set<Circuit>(["join", "buy_in", "settle", "settle_abort"]);
+const Prep = { none: 0, keys: 1, shuffle: 2, ready: 3 };
 const MIN_BUY_IN = 80;
 const MAX_BUY_IN = 200;
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
@@ -58,10 +61,14 @@ function randomPermutation(): number[] {
 const ten = (positions: number[]): bigint[] => Array.from({ length: 10 }, (_, i) => BigInt(positions[Math.min(i, positions.length - 1)]!));
 const seatsOf = (l: Ledger) => [0, 1, 2, 3, 4, 5].filter((i) => l.in_deal[i]);
 
-/** One player's private state and its view of the contract. A fresh deck key every deal. */
+/**
+ * One player's private state and its view of the contract. Two deck keys: this deal's, and
+ * the one the next deck is being prepared with; they rotate when a deal starts.
+ */
 class Seat {
   readonly contract: Contract<PS>;
   x = randomScalar();
+  nextX = randomScalar();
   /** The seat the referee gave this player; -1 until joined. */
   index = -1;
 
@@ -70,14 +77,24 @@ class Seat {
     this.contract = new Contract<PS>({
       player_secret: (ctx) => [ctx.privateState, secret],
       deck_key: (ctx) => [ctx.privateState, this.x],
+      next_deck_key: (ctx) => [ctx.privateState, this.nextX],
       permuted: (ctx) => [ctx.privateState, randomPermutation().map((k) => ctx.ledger.deck[k]!)],
+      next_permuted: (ctx) => [ctx.privateState, randomPermutation().map((k) => ctx.ledger.next_deck[k]!)],
       blinding: (ctx) => [ctx.privateState, Array.from({ length: 52 }, randomScalar)],
       best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, this.index, this.x)],
       split_share: (ctx) => [ctx.privateState, splits(ctx.ledger).share],
       split_odd: (ctx) => [ctx.privateState, splits(ctx.ledger).odd],
       forfeit_share: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).share],
       forfeit_odd: (ctx) => [ctx.privateState, forfeitSplit(ctx.ledger).odd],
+      prep_forfeit_share: (ctx) => [ctx.privateState, prepForfeitSplit(ctx.ledger).share],
+      prep_forfeit_odd: (ctx) => [ctx.privateState, prepForfeitSplit(ctx.ledger).odd],
     });
+  }
+
+  /** A deal started: the prepared key becomes this deal's (or a fresh one), and the next is drawn. */
+  rotate(prepared: boolean) {
+    this.x = prepared ? this.nextX : randomScalar();
+    this.nextX = randomScalar();
   }
 
   /** Where this player's stack and bond go back to. Practice chips go nowhere real. */
@@ -243,7 +260,28 @@ export class ContractReferee implements Referee {
       this.publish();
       return;
     }
+    const prepared = this.ledger.phase === Phase.holes;
+    for (const p of this.players) p.rotate(prepared);
     await this.drive();
+  }
+
+  /** Prepares the next deck as far as it can go right now: keys, then the shuffles in turn. */
+  private async prepareNext() {
+    let l = this.ledger;
+    if (l.next_prep === Prep.keys) {
+      for (const s of this.seats) {
+        if (s && l.next_in_deal[s.index] && !l.next_has_key[s.index]) await this.call(s.index, "post_next_key", BigInt(s.index));
+      }
+      l = this.ledger;
+    }
+    while (l.next_prep === Prep.shuffle && !this.stopped) {
+      const s = Number(l.next_turn);
+      this.message = `${this.names[s]} shuffles the next deck`;
+      this.publish();
+      await this.call(s, "shuffle_next", BigInt(s));
+      l = this.ledger;
+      await new Promise((r) => setTimeout(r, 0));
+    }
   }
 
   /** Runs every step that needs no decision, until a human's turn, a bot's think time, or the pause between deals. */
@@ -293,6 +331,8 @@ export class ContractReferee implements Referee {
             break;
           }
           case Phase.playing: {
+            // Betting is on: a good time to get the next deck ready in the background.
+            await this.prepareNext();
             this.message = "";
             const s = Number(l.to_act);
             this.publish();
@@ -322,9 +362,10 @@ export class ContractReferee implements Referee {
             await this.call(this.players[0]!.index, "settle_abort"); // permissionless; any contract instance will do
             break;
           default: {
-            // done: say who won, pause, deal again.
+            // done: say who won, finish the next deck if it is not ready yet, pause, deal again.
             this.finishDeal();
             this.publish();
+            await this.prepareNext();
             this.timer = setTimeout(() => {
               this.timer = null;
               void this.nextDeal();

@@ -1,12 +1,13 @@
 // The table's referee: mental poker dealing on Jubjub ElGamal, and No-Limit Hold'em betting
 // on top of it. See docs/protocol/dealing.md.
 //
-// One deal at a time (pipelining later). Phases:
+// Phases of a deal:
 //   join, buy_in the referee seats the caller (players never choose a seat), the buy-in
 //                and the bond paid into escrow; more chips between deals, up to the maximum
 //   leave        stack and bond back to the player's address, while not in a deal
-//   start_deal   idle or done -> keys; the players are the seats with chips now; the dealer
-//                button moves, the blinds are posted
+//   start_deal   idle or done -> holes when a prepared deck is ready for the players present,
+//                else -> keys; the dealer button moves, the blinds are posted; and the deck
+//                for the deal after this one starts being prepared
 //   post_key     keys -> shuffle once every player has posted
 //   shuffle      in seat order; the last one -> holes
 //   shares       the other players' hole positions; once everyone has -> playing, and the
@@ -30,6 +31,13 @@
 //   A street whose betting closes moves to release (or showdown after the river); a deal
 //   that folds down to one player pays them and is done.
 //
+// Pipelining: while a deal is played, the next deck is prepared by the players who were
+// seated with chips when the deal started (post_next_key, shuffle_next), so the next deal
+// can begin at the hole cards. The prepared deck serves only if every player it was
+// shuffled for is still seated with chips; otherwise it is dropped and the deal starts from
+// the keys, slowly but safely. A player who misses a preparation step past its deadline is
+// evicted between deals (expire_next) and the preparation starts over without them.
+//
 // Stakes are one unshielded asset per table, fixed at construction (ADR 0007). The contract
 // keeps its own books: the escrow holds every stack, every pot and a bond per seat.
 //
@@ -44,6 +52,8 @@
 import CompactStandardLibrary;
 
 enum Phase { idle, keys, shuffle, holes, playing, release, tabling, showdown, done, aborted }
+// The next deck's preparation.
+enum Prep { none, keys, shuffle, ready }
 
 struct Locked {
   a: JubjubPoint,
@@ -58,6 +68,9 @@ circuit HOLES_SECONDS(): Uint<64> { return 90; }
 circuit RELEASE_SECONDS(): Uint<64> { return 90; }
 circuit SHOWDOWN_SECONDS(): Uint<64> { return 90; }
 circuit TABLING_SECONDS(): Uint<64> { return 60; }
+// Preparing the next deck runs alongside a deal, so its budgets are looser.
+circuit PREP_KEYS_SECONDS(): Uint<64> { return 180; }
+circuit PREP_SHUFFLE_SECONDS(): Uint<64> { return 480; }
 // The betting clock. ponytail: no time bank yet; add one per deal when the client has a clock.
 circuit ACT_SECONDS(): Uint<64> { return 30; }
 circuit CLOCK_SLACK(): Uint<64> { return 120; }
@@ -107,10 +120,22 @@ export ledger deck: Vector<52, Locked>;
 export ledger fresh: Vector<52, Locked>;
 // Sum of every player's deck key point; cards are encrypted to this.
 export ledger joint_key: JubjubPoint;
-// seat -> deck key point, for checking shares
+// seat -> deck key point, for checking shares (a Map: cheaper to look up than a vector)
 export ledger keys: Map<Uint<8>, JubjubPoint>;
 export ledger keys_posted: Counter;
 export ledger shuffles_done: Counter;
+
+// The next deal's deck, prepared while this one is played.
+export ledger next_prep: Prep;
+export ledger next_in_deal: Vector<6, Boolean>;
+export ledger next_n_players: Uint<8>;
+export ledger next_deck: Vector<52, Locked>;
+export ledger next_joint_key: JubjubPoint;
+export ledger next_keys: Vector<6, JubjubPoint>;
+export ledger next_has_key: Vector<6, Boolean>;
+export ledger next_keys_posted: Counter;
+export ledger next_turn: Uint<8>;
+export ledger next_deadline: Uint<64>;
 // pos * 8 + seat -> that seat's share for that position
 export ledger shares_posted: Map<Uint<16>, JubjubPoint>;
 // seat -> distinct hole positions of others it has shared
@@ -128,6 +153,13 @@ witness deck_key(): JubjubScalar;
 // The current deck in the shuffler's secret order: permuted()[j] = deck[pi(j)].
 witness permuted(): Vector<52, Locked>;
 witness blinding(): Vector<52, JubjubScalar>;
+// The same for the next deal's deck: its key, and next_deck in secret order.
+witness next_deck_key(): JubjubScalar;
+witness next_permuted(): Vector<52, Locked>;
+// A missed preparation step: the offender's bond split among the other players of the
+// preparation (bond == share * players + odd, odd < players).
+witness prep_forfeit_share(): Uint<64>;
+witness prep_forfeit_odd(): Uint<64>;
 // Showdown: which five of the seven cards (0, 1 the hole cards, 2..6 the board) make the hand.
 witness best_five(): Vector<5, Uint<8>>;
 // Settlement: for each seat taken as a pot level, the equal share and the odd chips of that
@@ -159,6 +191,11 @@ circuit falses(): Vector<6, Boolean> {
 circuit identity(): JubjubPoint {
   const g = ecMulGenerator(1 as JubjubScalar);
   return ecAdd(g, ecNeg(g));
+}
+
+circuit identities(): Vector<6, JubjubPoint> {
+  const i = identity();
+  return [i, i, i, i, i, i];
 }
 
 // Card k as a public curve point. Anyone can compute the table of 52.
@@ -201,6 +238,32 @@ circuit set_u(v: Vector<6, Uint<64>>, s: Uint<8>, x: Uint<64>): Vector<6, Uint<6
   return map((k: Uint<8>): Uint<64> => (k == s ? x : v[k]), seats());
 }
 
+circuit at_p(v: Vector<6, JubjubPoint>, s: Uint<8>): JubjubPoint {
+  return fold((acc: JubjubPoint, k: Uint<8>): JubjubPoint => (k == s ? v[k] : acc), identity(), seats());
+}
+
+circuit set_p(v: Vector<6, JubjubPoint>, s: Uint<8>, x: JubjubPoint): Vector<6, JubjubPoint> {
+  return map((k: Uint<8>): JubjubPoint => (k == s ? x : v[k]), seats());
+}
+
+circuit count_b(v: Vector<6, Boolean>): Uint<8> {
+  return fold((acc: Uint<8>, b: Boolean): Uint<8> => (b ? (acc + 1) as Uint<8> : acc), 0 as Uint<8>, v);
+}
+
+// The first seat set in v, and the first set after `after`; NONE when there is none.
+circuit first_in(v: Vector<6, Boolean>): Uint<8> {
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k]) ? k : acc), NONE(), seats());
+}
+
+circuit next_in(v: Vector<6, Boolean>, after: Uint<8>): Uint<8> {
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && k > after && v[k]) ? k : acc), NONE(), seats());
+}
+
+// The first seat set in v that is not set in `has`.
+circuit first_without(v: Vector<6, Boolean>, has: Vector<6, Boolean>): Uint<8> {
+  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k] && !has[k]) ? k : acc), NONE(), seats());
+}
+
 circuit min_u(a: Uint<64>, b: Uint<64>): Uint<64> {
   return a < b ? a : b;
 }
@@ -216,19 +279,17 @@ circuit order_of(s: Uint<8>): Uint<8> {
 }
 
 circuit first_in_deal(): Uint<8> {
-  const v = in_deal;
-  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && v[k]) ? k : acc), NONE(), seats());
+  return first_in(in_deal);
 }
 
 // The next seat in the deal after `after` in seat order, or NONE.
-circuit next_in_deal(after: Uint<8>): Uint<8> {
-  const v = in_deal;
-  return fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && k > after && v[k]) ? k : acc), NONE(), seats());
+circuit next_seat_in_deal(after: Uint<8>): Uint<8> {
+  return next_in(in_deal, after);
 }
 
 // The next seat in the deal after `start`, going round the table.
 circuit next_round(start: Uint<8>): Uint<8> {
-  const nxt = next_in_deal(start);
+  const nxt = next_seat_in_deal(start);
   return nxt == NONE() ? first_in_deal() : nxt;
 }
 
@@ -281,6 +342,11 @@ constructor(token: Bytes<32>) {
   dealer = NONE();
   to_act = NONE();
   stack = zeros();
+  next_prep = Prep.none;
+  next_deck = fresh;
+  next_joint_key = identity();
+  next_keys = identities();
+  next_turn = NONE();
 }
 
 // The seat is free to change: between deals, or sitting out the one in progress.
@@ -341,22 +407,47 @@ export circuit leave(seat: Uint<8>): [] {
   free_seat(s);
 }
 
+// Starts preparing the deck for the deal after the current one, for the players present.
+circuit begin_prep(now: Uint<64>, present: Vector<6, Boolean>, n: Uint<8>): [] {
+  next_in_deal = present;
+  next_n_players = n;
+  next_deck = fresh;
+  next_joint_key = identity();
+  next_keys = identities();
+  next_has_key = falses();
+  next_keys_posted.resetToDefault();
+  next_turn = NONE();
+  next_prep = n >= 2 ? Prep.keys : Prep.none;
+  next_deadline = (now + PREP_KEYS_SECONDS()) as Uint<64>;
+}
+
 // Anyone may start a deal. The players are whoever is seated with chips; the button moves
-// to the next of them; the blinds go in now, though betting waits for the hole cards.
+// to the next of them; the blinds go in now, though betting waits for the hole cards. A
+// deck prepared during the last deal serves if everyone it was shuffled for is still here
+// with chips (latecomers sit this one out); otherwise the deal starts from the keys.
 export circuit start_deal(claimed_now: Uint<64>): [] {
   assert(phase == Phase.idle || phase == Phase.done, "deal in progress");
   const now = disclose(claimed_now);
   check_now(now);
   const st = stack;
   const present = map((s: Uint<8>): Boolean => seat_owner.member(s) && st[s] > 0, seats());
-  const n = fold((acc: Uint<8>, b: Boolean): Uint<8> => (b ? (acc + 1) as Uint<8> : acc), 0 as Uint<8>, present);
+  const n = count_b(present);
   assert(n >= 2, "not enough players");
-  in_deal = present;
-  n_players = n;
+  const np = next_in_deal;
+  const prepared = next_prep == Prep.ready && fold((ok: Boolean, k: Uint<8>): Boolean => (ok && (!np[k] || present[k])), true, seats());
+  in_deal = prepared ? np : present;
+  n_players = prepared ? next_n_players : n;
   deal_no.increment(1);
-  deck = fresh;
-  joint_key = identity();
+  deck = prepared ? next_deck : fresh;
+  joint_key = prepared ? next_joint_key : identity();
   keys.resetToDefault();
+  const nk = next_keys;
+  const nh = next_has_key;
+  for (const k of seats()) {
+    if (prepared && nh[k]) {
+      keys.insert(k, nk[k]);
+    }
+  }
   keys_posted.resetToDefault();
   shuffles_done.resetToDefault();
   shares_posted.resetToDefault();
@@ -370,7 +461,7 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
   // Button and blinds. Heads up, the dealer is the small blind and acts first preflop.
   const d = dealer == NONE() ? first_in_deal() : next_round(dealer);
   dealer = d;
-  const sb = n == 2 ? d : next_round(d);
+  const sb = n_players == 2 ? d : next_round(d);
   const bb = next_round(sb);
   const sb_amt = min_u(1, at_u(st, sb));
   const bb_amt = min_u(BIG_BLIND(), at_u(st, bb));
@@ -388,8 +479,15 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
   min_raise = BIG_BLIND();
   to_act = next_actor(bb, falses(), a1);
 
-  phase = Phase.keys;
-  deadline = (now + KEYS_SECONDS()) as Uint<64>;
+  if (prepared) {
+    phase = Phase.holes;
+    deadline = (now + HOLES_SECONDS()) as Uint<64>;
+  } else {
+    phase = Phase.keys;
+    deadline = (now + KEYS_SECONDS()) as Uint<64>;
+  }
+  // And the deck for the deal after this one, for whoever is here with chips now.
+  begin_prep(now, present, n);
 }
 
 // Phase 0. Returns the posted point.
@@ -409,6 +507,28 @@ export circuit post_key(seat: Uint<8>, claimed_now: Uint<64>): JubjubPoint {
     phase = Phase.shuffle;
     turn = first_in_deal();
     deadline = (now + SHUFFLE_SECONDS()) as Uint<64>;
+  }
+  return p;
+}
+
+// The same for the next deal's deck, by a player of its preparation.
+export circuit post_next_key(seat: Uint<8>, claimed_now: Uint<64>): JubjubPoint {
+  assert(next_prep == Prep.keys, "not posting next keys");
+  const s = disclose(seat);
+  owner_check(s);
+  assert(at_b(next_in_deal, s), "not in the next deal");
+  assert(!at_b(next_has_key, s), "seat already has a next key");
+  const now = disclose(claimed_now);
+  check_now(now);
+  const p = disclose(ecMulGenerator(next_deck_key()));
+  next_keys = set_p(next_keys, s, p);
+  next_has_key = set_b(next_has_key, s, true);
+  next_joint_key = ecAdd(next_joint_key, p);
+  next_keys_posted.increment(1);
+  if (next_keys_posted == next_n_players as Uint<64>) {
+    next_prep = Prep.shuffle;
+    next_turn = first_in(next_in_deal);
+    next_deadline = (now + PREP_SHUFFLE_SECONDS()) as Uint<64>;
   }
   return p;
 }
@@ -433,32 +553,28 @@ circuit compress(alpha: Field, c: Locked): Field {
 // (Fiat-Shamir inside the circuit), so the prover fixes the deck before learning them; a
 // non-permutation then passes with probability about 2^-245 per attempt. See
 // docs/protocol/dealing.md, "Cheaper shuffles".
-export circuit shuffle(seat: Uint<8>, claimed_now: Uint<64>): [] {
-  assert(phase == Phase.shuffle, "not shuffling");
-  const s_ = disclose(seat);
-  owner_check(s_);
-  assert(s_ == turn, "not your turn to shuffle");
-  const now = disclose(claimed_now);
-  check_now(now);
-
-  const s = permuted();
-  const r = blinding();
-  const pk = joint_key;
-  const d = deck;
+circuit reshuffle(d: Vector<52, Locked>, pk: JubjubPoint, s: Vector<52, Locked>, r: Vector<52, JubjubScalar>): Vector<52, Locked> {
   const idx = indices();
-
   const gamma = fold((acc: Field, k: Uint<8>): Field => absorb(acc, s[k]), 0 as Field, idx);
   const alpha = transientHash<Vector<2, Field>>([gamma, 1 as Field]);
   const lhs = fold((acc: Field, k: Uint<8>): Field => acc * (gamma + compress(alpha, s[k])), 1 as Field, idx);
   const rhs = fold((acc: Field, k: Uint<8>): Field => acc * (gamma + compress(alpha, d[k])), 1 as Field, idx);
   assert(lhs == rhs, "not a permutation");
-
   // Output slot j is s[j] re-encrypted with fresh randomness.
-  deck = disclose(map((j: Uint<8>): Locked =>
-    Locked { a: ecAdd(s[j].a, ecMulGenerator(r[j])), b: ecAdd(s[j].b, ecMul(pk, r[j])) }, idx));
-  shuffles_done.increment(1);
+  return map((j: Uint<8>): Locked =>
+    Locked { a: ecAdd(s[j].a, ecMulGenerator(r[j])), b: ecAdd(s[j].b, ecMul(pk, r[j])) }, idx);
+}
 
-  const nxt = next_in_deal(s_);
+export circuit shuffle(seat: Uint<8>, claimed_now: Uint<64>): [] {
+  assert(phase == Phase.shuffle, "not shuffling");
+  const s = disclose(seat);
+  owner_check(s);
+  assert(s == turn, "not your turn to shuffle");
+  const now = disclose(claimed_now);
+  check_now(now);
+  deck = disclose(reshuffle(deck, joint_key, permuted(), blinding()));
+  shuffles_done.increment(1);
+  const nxt = next_seat_in_deal(s);
   if (nxt == NONE()) {
     phase = Phase.holes;
     deadline = (now + HOLES_SECONDS()) as Uint<64>;
@@ -466,6 +582,63 @@ export circuit shuffle(seat: Uint<8>, claimed_now: Uint<64>): [] {
     turn = nxt;
     deadline = (now + SHUFFLE_SECONDS()) as Uint<64>;
   }
+}
+
+// The same for the next deal's deck, in seat order among its players; the last one leaves
+// it ready for the next start_deal.
+export circuit shuffle_next(seat: Uint<8>, claimed_now: Uint<64>): [] {
+  assert(next_prep == Prep.shuffle, "not shuffling the next deck");
+  const s = disclose(seat);
+  owner_check(s);
+  assert(s == next_turn, "not your turn to shuffle");
+  const now = disclose(claimed_now);
+  check_now(now);
+  next_deck = disclose(reshuffle(next_deck, next_joint_key, next_permuted(), blinding()));
+  const nxt = next_in(next_in_deal, s);
+  if (nxt == NONE()) {
+    next_prep = Prep.ready;
+    next_turn = NONE();
+    next_deadline = 0;
+  } else {
+    next_turn = nxt;
+    next_deadline = (now + PREP_SHUFFLE_SECONDS()) as Uint<64>;
+  }
+}
+
+// Between deals, anyone, once a preparation deadline has passed: the seat that owed the
+// step is evicted (its bond split among the other players of the preparation, its stack
+// sent home) and the preparation starts over for whoever is left with chips. Not during a
+// deal: evicting a player mid-deal would break it.
+export circuit expire_next(claimed_now: Uint<64>): [] {
+  assert(next_prep == Prep.keys || next_prep == Prep.shuffle, "no preparation pending");
+  assert(blockTimeGte(next_deadline), "deadline not reached");
+  assert(phase == Phase.idle || phase == Phase.done, "deal in progress");
+  const now = disclose(claimed_now);
+  check_now(now);
+  const o = next_prep == Prep.keys ? first_without(next_in_deal, next_has_key) : next_turn;
+  assert(o != NONE(), "nobody owes a step");
+  const v = next_in_deal;
+  const eligible = map((i: Uint<8>): Boolean => v[i] && i != o && seat_owner.member(i), seats());
+  const n = count_b(eligible) as Uint<64>;
+  assert(n > 0, "nobody to pay");
+  const share = disclose(prep_forfeit_share());
+  const odd = disclose(prep_forfeit_odd());
+  assert(BOND() == ((share * n + odd) as Uint<64>) && odd < n, "bad split");
+  const fd = map((i: Uint<8>): Uint<8> => from_dealer(i), seats());
+  const first = fold((acc: Uint<8>, i: Uint<8>): Uint<8> => ((eligible[i] && (acc == NONE() || fd[i] < at_b_u8(fd, acc))) ? i : acc), NONE(), seats());
+  stack = map((i: Uint<8>): Uint<64> => (eligible[i] ? (stack[i] + share + (i == first ? odd : 0)) as Uint<64> : stack[i]), seats());
+  pay_out(o, at_u(stack, o));
+  free_seat(o);
+  const st = stack;
+  const present = map((s: Uint<8>): Boolean => seat_owner.member(s) && st[s] > 0, seats());
+  begin_prep(now, present, count_b(present));
+}
+
+// The caller knows the deck key behind the seat's posted point: the ownership proof for
+// every share, since only the seat's owner could have posted that key.
+circuit key_check(s: Uint<8>, x: JubjubScalar): [] {
+  assert(keys.member(s), "seat has no deck key");
+  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
 }
 
 // One decryption share for a position, recorded under pos * 8 + seat. The deck is passed
@@ -545,8 +718,7 @@ export circuit shares(seat: Uint<8>, positions: Vector<10, Uint<8>>, claimed_now
   const s = disclose(seat);
   const ps = disclose(positions);
   const x = deck_key();
-  assert(keys.member(s), "seat has no deck key");
-  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  key_check(s, x);
   const now = disclose(claimed_now);
   check_now(now);
   const n = n_players;
@@ -582,8 +754,7 @@ export circuit release(seat: Uint<8>, claimed_now: Uint<64>): [] {
   assert(phase == Phase.release, "nothing to release");
   const s = disclose(seat);
   const x = deck_key();
-  assert(keys.member(s), "seat has no deck key");
-  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  key_check(s, x);
   const now = disclose(claimed_now);
   check_now(now);
   const holes = (n_players * 2) as Uint<8>;
@@ -695,7 +866,7 @@ export circuit act_out(seat: Uint<8>, kind: Uint<8>, to: Uint<64>, claimed_now: 
   const amount = action_amount(s, k, t, folded, all_in);
   assert(k == 0 || at_u(stack, s) == amount, "this leaves chips behind: use act");
   const x = deck_key();
-  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  key_check(s, x);
   const holes = (n_players * 2) as Uint<8>;
   const d = deck;
   for (const i of 0..5) {
@@ -729,8 +900,7 @@ export circuit show(seat: Uint<8>, claimed_now: Uint<64>): [] {
   const s = disclose(seat);
   assert(at_b(in_deal, s), "not in this deal");
   const x = deck_key();
-  assert(keys.member(s), "seat has no deck key");
-  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  key_check(s, x);
   const now = disclose(claimed_now);
   check_now(now);
   const own = (order_of(s) * 2) as Uint<8>;
@@ -839,7 +1009,7 @@ export circuit show_hand(seat: Uint<8>, claimed_now: Uint<64>): Uint<64> {
   assert(at_b(in_deal, s) && !at_b(folded, s), "not in the showdown");
   assert(!scores.member(s), "already shown");
   const x = deck_key();
-  assert(keys.lookup(s) == ecMulGenerator(x), "share does not match the seat's deck key");
+  key_check(s, x);
   const now = disclose(claimed_now);
   check_now(now);
   const d = deck;
