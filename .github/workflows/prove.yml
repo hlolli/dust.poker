@@ -1,0 +1,34 @@
+# The proof gate: every circuit of the referee proves with Midnight's wasm prover, on the
+# real keys. Slow (the prover is built with nix on a cache miss, and the shuffle proofs take
+# minutes on a runner), so it guards master rather than every pull request; ci.yml is the
+# fast check. Run by hand with workflow_dispatch.
+name: prove
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+concurrency:
+  group: prove-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - uses: DeterminateSystems/nix-installer-action@main
+      - run: bun install --frozen-lockfile
+      # The prover (wasm), the key generator and the KZG parameters, built from the pinned
+      # midnight-zkir revision; kept between runs.
+      - uses: actions/cache@v4
+        id: prover
+        with:
+          path: .compact/prover
+          key: prover-${{ hashFiles('scripts/build-prover.sh') }}
+      - if: steps.prover.outputs.cache-hit != 'true'
+        run: bun run prover:build
+      - run: bun run compact:build --zk
+      - run: bun run prove:deal

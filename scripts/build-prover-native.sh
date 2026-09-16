@@ -9,7 +9,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${1:-$ROOT/.compact/prover-native}"
-FLAKE="github:midnightntwrk/midnight-zkir"
+# Pinned: the revision the keys and the wasm were validated against; a newer one may change the IR or key format.
+FLAKE="github:midnightntwrk/midnight-zkir/7dff84a685cd8baed2e69a2b66ae63573fe5a575"
 CRATE="$ROOT/prover/native"
 TARGET_DIR="$ROOT/.compact/prover-native-target"
 

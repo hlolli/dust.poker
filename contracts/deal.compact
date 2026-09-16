@@ -617,18 +617,22 @@ export circuit expire_next(claimed_now: Uint<64>): [] {
   check_now(now);
   const o = next_prep == Prep.keys ? first_without(next_in_deal, next_has_key) : next_turn;
   assert(o != NONE(), "nobody owes a step");
+  // An offender already gone (evicted from the deal, or left) has nothing left to forfeit.
+  const here = seat_owner.member(o);
   const v = next_in_deal;
-  const eligible = map((i: Uint<8>): Boolean => v[i] && i != o && seat_owner.member(i), seats());
+  const eligible = map((i: Uint<8>): Boolean => here && v[i] && i != o && seat_owner.member(i), seats());
   const n = count_b(eligible) as Uint<64>;
-  assert(n > 0, "nobody to pay");
+  assert(!here || n > 0, "nobody to pay");
   const share = disclose(prep_forfeit_share());
   const odd = disclose(prep_forfeit_odd());
-  assert(BOND() == ((share * n + odd) as Uint<64>) && odd < n, "bad split");
+  assert(!here || (BOND() == ((share * n + odd) as Uint<64>) && odd < n), "bad split");
   const fd = map((i: Uint<8>): Uint<8> => from_dealer(i), seats());
   const first = fold((acc: Uint<8>, i: Uint<8>): Uint<8> => ((eligible[i] && (acc == NONE() || fd[i] < at_b_u8(fd, acc))) ? i : acc), NONE(), seats());
   stack = map((i: Uint<8>): Uint<64> => (eligible[i] ? (stack[i] + share + (i == first ? odd : 0)) as Uint<64> : stack[i]), seats());
-  pay_out(o, at_u(stack, o));
-  free_seat(o);
+  if (here) {
+    pay_out(o, at_u(stack, o));
+    free_seat(o);
+  }
   const st = stack;
   const present = map((s: Uint<8>): Boolean => seat_owner.member(s) && st[s] > 0, seats());
   begin_prep(now, present, count_b(present));

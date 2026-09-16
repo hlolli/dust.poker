@@ -15,6 +15,7 @@
     "prover:build": "scripts/build-prover.sh",
     "prover:build-native": "scripts/build-prover-native.sh",
     "bench:prove": "bun scripts/bench-prove.ts",
+    "prove:deal": "bun scripts/prove-deal.ts",
     "check": "bun run compact:build && bun run typecheck && bun test && bun run build"
   },
   "dependencies": {

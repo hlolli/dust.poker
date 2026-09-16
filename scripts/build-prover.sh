@@ -15,7 +15,8 @@
 # binary bundled with compactc: same version string, different key file format.
 set -euo pipefail
 
-FLAKE="github:midnightntwrk/midnight-zkir"
+# Pinned: the revision the keys and the wasm were validated against; a newer one may change the IR or key format.
+FLAKE="github:midnightntwrk/midnight-zkir/7dff84a685cd8baed2e69a2b66ae63573fe5a575"
 OUT="${1:-$(cd "$(dirname "$0")/.." && pwd)/.compact/prover}"
 mkdir -p "$OUT"
 cd "$OUT"
