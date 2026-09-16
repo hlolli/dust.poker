@@ -522,7 +522,12 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
   street = 0;
   current_bet = BIG_BLIND();
   min_raise = BIG_BLIND();
-  to_act = next_actor(bb, falses(), a1);
+  // Whoever is first to act after the blinds. Nobody, when every other player is all in from
+  // the blinds and the one who is not has the big blind already in: there is no decision to
+  // make, and the hands are tabled once the hole cards are dealt (see shares).
+  const first = next_actor(bb, falses(), a1);
+  const covers = first != NONE() && at_u(b1, first) >= BIG_BLIND();
+  to_act = (actor_count(falses(), a1) > 1 || !covers) ? first : NONE();
 
   if (prepared) {
     phase = Phase.holes;

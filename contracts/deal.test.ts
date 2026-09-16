@@ -647,18 +647,45 @@ test("sitting out: a seat that stood up is left out of the next deal and its dec
   expect(t.ledger.n_players).toBe(2n);
 }, 60_000);
 
+/** Three players put all but one chip in and one takes the pot: stacks of 1, 1 and the rest. A
+ *  chopped pot leaves two with chips, so the deal is played again until one player has them all. */
+async function oneWinnerAllIn(): Promise<{ t: TestTable; winner: number }> {
+  for (;;) {
+    const t = await TestTable.seated(3);
+    await t.dealt();
+    await t.call(0, "act", 0n, RAISE, 199n);
+    await t.call(1, "act", 1n, CALL, 0n);
+    await t.call(2, "act", 2n, CALL, 0n);
+    expect(t.ledger.stack.slice(0, 3)).toEqual([1n, 1n, 1n]);
+    while (t.ledger.phase !== Phase.showdown) await t.checkAndRelease();
+    await t.showAll();
+    await t.call(0, "settle");
+    const rich = [0, 1, 2].filter((i) => t.ledger.stack[i]! > 1n);
+    if (rich.length === 1) return { t, winner: rich[0]! };
+  }
+}
+
+test("heads up against a player all in from the blinds: the big blind has no decision, the small blind does", async () => {
+  const { t, winner } = await oneWinnerAllIn();
+  // The winner stays; one short stack leaves. Heads up, the dealer is the small blind.
+  const [leaver] = [0, 1, 2].filter((i) => i !== winner);
+  await t.call(leaver!, "leave", BigInt(leaver!));
+  await t.call(winner, "start_deal");
+  const l = t.ledger;
+  if (Number(l.dealer) !== winner) {
+    // The short stack's one chip is the small blind; the winner's big blind covers it: nothing to decide.
+    expect(l.to_act).toBe(NONE);
+  } else {
+    // The short stack is all in as the big blind for one chip; the winner, small blind with one in, faces two: call or fold.
+    expect(l.to_act).toBe(BigInt(winner));
+    expect(l.bet[winner]).toBe(1n);
+    expect(l.current_bet).toBe(2n);
+  }
+}, 240_000);
+
 test("everyone all in from the blinds: no betting, hands tabled, the board runs out", async () => {
-  // Three players put all but one chip in; the winner leaves; the two left have a chip each.
-  const t = await TestTable.seated(3);
-  await t.dealt();
-  await t.call(0, "act", 0n, RAISE, 199n);
-  await t.call(1, "act", 1n, CALL, 0n);
-  await t.call(2, "act", 2n, CALL, 0n);
-  expect(t.ledger.stack.slice(0, 3)).toEqual([1n, 1n, 1n]);
-  while (t.ledger.phase !== Phase.showdown) await t.checkAndRelease();
-  await t.showAll();
-  await t.call(0, "settle");
-  const winner = [0, 1, 2].find((i) => t.ledger.stack[i]! > 1n)!;
+  // The winner leaves; the two left have a chip each.
+  const { t, winner } = await oneWinnerAllIn();
   await t.call(winner, "leave", BigInt(winner));
   // Heads up with a chip each: both blinds are all in before a card is dealt.
   await t.call([0, 1, 2].find((i) => i !== winner)!, "start_deal");
@@ -680,7 +707,7 @@ test("everyone all in from the blinds: no betting, hands tabled, the board runs 
   await t.call(players[0]!, "settle");
   expect(t.ledger.phase).toBe(Phase.done);
   expect(t.ledger.stack.reduce((a, b) => a + b, 0n)).toBe(2n);
-}, 120_000);
+}, 240_000);
 
 test("the time bank: seconds past the thirty come out of it, once; it refills each deal", async () => {
   const t = await TestTable.seated(3);
