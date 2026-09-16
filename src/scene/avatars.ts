@@ -132,6 +132,23 @@ export function poseSeated(avatar: Avatar, seatHeight = 0.5) {
 }
 
 /**
+ * A seated player's hands: holding cards up near the chest, or, with no cards, resting apart
+ * on the rail in front of them. Re-aims the forearms only, so it can follow the deal.
+ */
+export function poseHands(avatar: Avatar, holding: boolean) {
+  avatar.root.updateMatrixWorld(true);
+  const neck = new THREE.Vector3();
+  avatar.bones.get("Bip01 Neck")?.getWorldPosition(neck);
+  avatar.root.worldToLocal(neck);
+  for (const side of ["L", "R"] as const) {
+    const s = side === "L" ? 1 : -1;
+    const target = holding ? new THREE.Vector3(s * 0.07, -0.16, 0.34) : new THREE.Vector3(s * 0.2, -0.36, 0.42);
+    aimAt(avatar, `Bip01 ${side} Forearm`, `Bip01 ${side} Hand`, neck.clone().add(target));
+  }
+  avatar.root.updateMatrixWorld(true);
+}
+
+/**
  * Stands the avatar at ease behind a counter: arms down, hands resting a little forward
  * at counter height, a small nod of attention. Facing +z in root space.
  */
@@ -171,7 +188,7 @@ export function cardAnchor(avatar: Avatar): THREE.Object3D {
   const mid = avatar.root.worldToLocal(l.add(r).multiplyScalar(0.5));
   const anchor = new THREE.Object3D();
   anchor.name = "cards";
-  anchor.position.copy(mid).add(new THREE.Vector3(0, 0.09, 0.03));
+  anchor.position.copy(mid).add(new THREE.Vector3(0, 0.1, 0.07)); // above and ahead of the fingertips
   anchor.rotation.set(-0.55, Math.PI, 0, "YXZ"); // face the player, leaning back toward the eyes
   avatar.root.add(anchor);
   return anchor;

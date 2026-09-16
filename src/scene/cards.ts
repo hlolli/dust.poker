@@ -47,9 +47,13 @@ function texture(face: Card | "back"): THREE.CanvasTexture {
   return t;
 }
 
+/** The deck's back pattern, for anything else made of cards (the dealer's deck). */
+export const cardBack = () => material("back");
+
 function material(face: Card | "back"): THREE.MeshLambertMaterial {
   let m = materials.get(face);
-  if (!m) materials.set(face, (m = new THREE.MeshLambertMaterial({ map: texture(face) })));
+  // The rounded corners are transparent on the canvas; without alpha they render black.
+  if (!m) materials.set(face, (m = new THREE.MeshLambertMaterial({ map: texture(face), transparent: true, alphaTest: 0.5 })));
   return m;
 }
 

@@ -7,6 +7,7 @@ import * as L from "@midnightntwrk/ledger-v9";
 import { Seat } from "../referee/contract.ts";
 import { snapshot } from "./indexer.ts";
 import { bytes, callTx, deployable, deployTx, hex, prove } from "./ledger.ts";
+import type { Profile } from "../ui/profiles.ts";
 import type { KeyMaterialProvider, Wallet } from "./wallet.ts";
 
 export { L as ledger };
@@ -47,30 +48,24 @@ async function submit(w: Wallet, tx: L.UnprovenTransaction): Promise<void> {
   await w.api.submitTransaction(balanced);
 }
 
-/** The player's identity at Live tables: one secret, kept in this browser. ponytail: localStorage;
- *  a wallet-derived or exportable key when the table is worth more than test chips. */
-export function you(): Seat {
-  const key = "dust.poker/player-secret";
-  let stored = localStorage.getItem(key);
-  if (!stored) localStorage.setItem(key, (stored = String(new Seat("You").secret)));
-  return new Seat("You", BigInt(stored));
-}
+/** The player at a Live table: the profile's name and its secret, which is the identity the seat owner's point derives from. */
+export const you = (profile: Profile) => new Seat(profile.name, BigInt(profile.secret));
 
 /** Deploys a table; returns its address. Nothing to prove in a deploy, but the wallet balances the fee. */
-export async function deployTable(w: Wallet): Promise<string> {
-  const constructed = await you().contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), ASSET());
+export async function deployTable(w: Wallet, profile: Profile): Promise<string> {
+  const constructed = await you(profile).contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), ASSET());
   const { address, tx } = deployTx(w.networkId, await deployable(constructed.currentContractState, keyMaterial.getVerifierKey), new Date(Date.now() + HOUR));
   await submit(w, tx);
   return address;
 }
 
 /** Joins the table at `address` with `buy` chips; the wallet adds buy plus bond of the table's asset. Returns the seat. */
-export async function joinTable(w: Wallet, address: string, buy = 200n): Promise<number> {
+export async function joinTable(w: Wallet, profile: Profile, address: string, buy = 200n): Promise<number> {
   const snap = await snapshot(w.config.indexerUri, address);
   if (!snap.state) throw new Error(`no table at ${address.slice(0, 12)}...`);
   const contract = L.ContractState.deserialize(bytes(snap.state));
   const ctx = createCircuitContext("join", address, COIN_PUBLIC_KEY, RuntimeContractState.deserialize(contract.serialize()), {}, undefined, undefined, undefined, snap.block.timestamp);
-  const run = await you().contract.circuits.join(ctx, w.payout, buy);
+  const run = await you(profile).contract.circuits.join(ctx, w.payout, buy);
   const params = L.LedgerParameters.deserialize(bytes(snap.block.ledgerParameters));
   await submit(w, callTx(w.networkId, run, contract, params, new Date(Date.now() + HOUR)));
   return Number(run.result);

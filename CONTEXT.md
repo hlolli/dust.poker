@@ -46,6 +46,10 @@ _Avoid_: Away, AFK, standing up (as the state)
 Chips a player brings to their stack, when seated or between deals, so that the stack is between 40 and 100 big blinds. Never during a deal the player is in.
 _Avoid_: Re-buy, top-up, reload, add-on
 
+**Profile**:
+Who a player is at the table in this browser: a name, a character, and the identity a Live table knows them by. A player may keep several and uses one at a time.
+_Avoid_: Account, user, login, avatar (for the whole)
+
 **Wallet**:
 The player's own Midnight wallet (Lace), which holds their funds, pays fees, and signs and submits their transactions. It never holds cards or deck keys, and the referee never talks to it.
 _Avoid_: Account, login, connector

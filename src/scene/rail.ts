@@ -6,9 +6,9 @@ import { Label } from "./text.ts";
 const BTN = { font: "bold 72px Georgia, serif", canvas: [512, 128] as [number, number], color: "#f6f1e6" };
 
 /**
- * The player's controls, on the rail in front of their seat: FOLD, CHECK/CALL, RAISE,
- * a raise amount with - and +, and SHOW once a deal is over. All WebGL; the same meshes
- * answer mouse and XR rays. Keyboard: F, C, R, S, and arrow keys for the amount.
+ * The player's controls in a headset, on the rail in front of their seat: FOLD, CHECK/CALL,
+ * RAISE, a raise amount with - and +, and SHOW once a deal is over. All WebGL, answering XR
+ * rays. In a browser window the bar at the bottom of the page (ui/actions.ts) is used instead.
  */
 export class Rail {
   readonly group = new THREE.Group();
@@ -61,16 +61,6 @@ export class Rail {
     ]);
     for (const m of handlers.keys()) register(m);
     this.onSelect = (o) => handlers.get(o)?.();
-
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "s" || e.key === "S") return handlers.get(this.show.mesh)!();
-      if (!this.state?.legal) return;
-      if (e.key === "f" || e.key === "F") handlers.get(this.fold.mesh)!();
-      else if (e.key === "c" || e.key === "C") handlers.get(this.call.mesh)!();
-      else if (e.key === "r" || e.key === "R") handlers.get(this.raise.mesh)!();
-      else if (e.key === "ArrowUp" || e.key === "ArrowRight") this.step(1);
-      else if (e.key === "ArrowDown" || e.key === "ArrowLeft") this.step(-1);
-    });
   }
 
   /** Give this to the controls' onSelect. */

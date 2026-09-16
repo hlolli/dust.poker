@@ -4,9 +4,264 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dust.poker</title>
+    <meta name="description" content="No-limit Texas hold'em in a 3D casino room, in the browser and in VR, refereed by a smart contract on Midnight. Practice with bots, or sit at a Live table with Lace." />
+    <meta name="theme-color" content="#160610" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='30' fill='%236e1420' stroke='%23c9a24a' stroke-width='4'/%3E%3Ctext x='32' y='45' font-size='38' text-anchor='middle' fill='%23ffe9b0' font-family='Georgia,serif'%3E%E2%99%A0%3C/text%3E%3C/svg%3E" />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="dust.poker" />
+    <meta property="og:title" content="dust.poker" />
+    <meta property="og:description" content="No-limit hold'em in a 3D casino room, refereed on Midnight. Practice with bots, or sit at a Live table with Lace." />
+    <meta property="og:url" content="https://dust.poker/" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="dust.poker" />
+    <meta name="twitter:description" content="No-limit hold'em in a 3D casino room, refereed on Midnight." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!-- Limelight: 1930s marquee lettering, for the menu lines. Yellowtail: the neon script of the sign.
+         Cormorant Garamond: everything that is read. -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Limelight&family=Yellowtail&family=Cormorant+Garamond:ital,wght@0,500;0,600;0,700;1,500&display=swap" />
     <style>
+      :root {
+        --velvet: #160610;
+        --velvet-deep: #08030a;
+        --velvet-light: #3a0c1a;
+        --brass: #c9a24a;
+        --brass-dark: #8a6a1c;
+        --cream: #f6f1e6;
+        --gold: #ffe9b0;
+        --neon: #ff9a3c;
+        --dim: #8a7a66;
+        --display: "Limelight", "Copperplate", "Georgia", serif;
+        --text: "Cormorant Garamond", "Palatino", "Georgia", serif;
+        --script: "Yellowtail", "Brush Script MT", "Snell Roundhand", cursive;
+      }
       html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
       canvas { display: block; }
+
+      /* ---- The main menu: the house marquee over a letterboard ---------------------------- */
+      .menu {
+        position: fixed; inset: 0; overflow: auto; z-index: 2;
+        display: flex; flex-direction: column; align-items: center; gap: 28px;
+        padding: 36px 16px 64px;
+        background: var(--velvet); /* the shader backdrop paints over this */
+        color: var(--cream); font: 500 18px/1.45 var(--text);
+      }
+      .backdrop { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; }
+      .menu > :not(.backdrop) { position: relative; }
+      .menu :focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+      .marquee { width: min(680px, 100%); position: relative; padding: 22px 0 0; }
+      .bulbs { display: flex; justify-content: space-between; padding: 0 26px; position: relative; z-index: 1; }
+      .bulbs i {
+        width: 12px; height: 12px; border-radius: 50%;
+        background: radial-gradient(circle at 40% 35%, #fff8e1, #ffc46b 55%, #b8862a);
+        box-shadow: 0 0 10px 3px #ffc46b99;
+        animation: chase 0.75s steps(1) 4 both;
+      }
+      .bulbs i:nth-child(3n + 2) { animation-delay: 0.25s; }
+      .bulbs i:nth-child(3n) { animation-delay: 0.5s; }
+      @keyframes chase {
+        0% { filter: brightness(1); }
+        33% { filter: brightness(0.35); box-shadow: none; }
+        100% { filter: brightness(1); }
+      }
+      .sign {
+        margin-top: -6px; padding: 30px 28px 26px; text-align: center;
+        background:
+          radial-gradient(ellipse at 50% 40%, #4a1020 0%, #2a0812 70%),
+          repeating-linear-gradient(90deg, transparent 0 34px, #ffffff08 34px 36px);
+        border: 3px solid #e2e2e2;
+        box-shadow: 0 0 0 5px #3b0c18, 0 0 0 7px #9a9a9a, 0 18px 40px #000000aa, 0 0 60px #ff9a3c22 inset;
+      }
+      .marquee h1 {
+        margin: 0; font: 400 clamp(64px, 12vw, 108px)/1 var(--script); color: #fff0b8;
+        text-shadow: 0 0 6px #fff, 0 0 18px var(--neon), 0 0 42px var(--neon), 0 0 80px #ff5a1c88;
+      }
+      .marquee p { margin: 10px 0 0; font: italic 500 20px var(--text); color: #e0c6a0; letter-spacing: 0.02em; }
+
+      .board {
+        width: min(680px, 100%); box-sizing: border-box;
+        background: linear-gradient(#1c0812, #0f0409);
+        border: 2px solid var(--brass); box-shadow: 0 0 0 1px #5a4520 inset, 0 24px 60px #000000aa;
+      }
+      .line { padding: 22px 28px 24px; border-top: 1px solid var(--brass-dark); }
+      .line:first-child { border-top: 0; }
+      .line h2 { margin: 0 0 12px; font: 400 15px var(--display); color: var(--brass); letter-spacing: 0.04em; }
+
+      /* A show on the listing: its name in marquee letters, a line about it beneath. */
+      .show {
+        display: block; width: 100%; text-align: left; padding: 0; margin: 0;
+        background: none; border: 0; color: inherit; font: inherit; cursor: default;
+      }
+      button.show { cursor: pointer; }
+      .show .title {
+        display: block; font: 400 clamp(30px, 6vw, 42px)/1.15 var(--display); color: var(--cream);
+        text-shadow: 0 0 12px #ffe9b066, 0 2px 0 #00000088;
+        transition: text-shadow 200ms, color 200ms;
+      }
+      button.show:hover:not(:disabled) .title, button.show:focus-visible .title { color: #fff; text-shadow: 0 0 10px #fff3, 0 0 28px var(--gold), 0 2px 0 #00000088; }
+      button.show:disabled { cursor: default; }
+      .show .sub { display: block; margin-top: 6px; color: #d9c6a8; font: italic 500 18px/1.4 var(--text); overflow-wrap: anywhere; }
+      .unlit .title { color: #5e4e3e; text-shadow: none; }
+      .unlit .sub { color: #8a7a66; }
+
+      /* Brass name plates, as on the seats. */
+      .plates { display: flex; flex-wrap: wrap; gap: 10px; }
+      .plates .plate {
+        display: inline-flex; align-items: center; gap: 10px; height: 38px; padding: 0 16px;
+        font: 400 15px var(--display); color: #2a1a08; cursor: pointer;
+        background: linear-gradient(#e2bb63, #b8862a 55%, #d4a34a); border: 1px solid #5a4520; border-radius: 2px;
+        box-shadow: 0 1px 0 #fff3 inset, 0 -1px 0 #0006 inset, 0 2px 0 #000a; margin: 0;
+      }
+      .plates .plate.active { background: linear-gradient(#ffe9b0, #d4a34a 55%, #e2bb63); box-shadow: 0 0 14px #ffe9b088, 0 1px 0 #fff6 inset, 0 2px 0 #000a; }
+      .plates .plate .remove { font: 700 14px var(--text); color: #5a3a10; padding: 0 2px; }
+      .plates .plate .remove:hover { color: #6e1420; }
+      .plates .plate.add { background: none; color: var(--brass); border: 1px dashed var(--brass-dark); box-shadow: none; }
+
+      /* Tickets: a strip of stubs to pick one of. */
+      .tickets { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+      .ticket input { position: absolute; opacity: 0; width: 0; height: 0; }
+      .ticket span {
+        display: inline-block; padding: 6px 12px 6px 14px; font: 500 16px var(--text); color: #d9c6a8; cursor: pointer;
+        background: #2a0a14; border: 1px solid var(--brass-dark); border-left: 3px dotted var(--brass);
+      }
+      .ticket input:checked + span { background: var(--brass); color: #2a1a08; border-color: var(--brass); font-weight: 700; }
+      .ticket input:focus-visible + span { outline: 2px solid var(--gold); }
+
+      .menu .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 14px; }
+      .menu input[type=text], .menu input:not([type]) {
+        flex: 1 1 200px; min-width: 0; height: 40px; padding: 0 10px; box-sizing: border-box;
+        font: 600 18px var(--text); color: var(--gold); background: #0a0306;
+        border: 0; border-bottom: 2px solid var(--brass); outline: none;
+      }
+      .menu input::placeholder { color: #6a5a48; font-style: italic; font-weight: 500; }
+      .menu .row button, .menu form button {
+        height: 40px; padding: 0 16px; cursor: pointer;
+        font: 400 14px var(--display); color: var(--cream); letter-spacing: 0.03em;
+        background: #3a2a18; border: 1px solid var(--brass); border-radius: 2px;
+        box-shadow: 0 1px 0 #ffe9b055 inset, 0 3px 0 #00000088;
+      }
+      .menu .row button:hover:not(:disabled), .menu form button:hover { filter: brightness(1.15); }
+      .menu .row button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 #ffe9b055 inset; }
+      .menu button:disabled { opacity: 0.4; cursor: default; }
+      .menu .connect { background: #2a3a6e; }
+      .menu .join { background: #1f5f3a; }
+      .menu .deploy { background: #8a6a1c; }
+      .menu .cancel { background: none; border-color: var(--brass-dark); color: #d9c6a8; }
+      .network { display: flex; flex-wrap: wrap; gap: 8px; }
+      .menu [hidden] { display: none; }
+
+      /* The foot of the page: the suits in brass, what the band is playing, the small print. */
+      .foot { width: min(680px, 100%); text-align: center; padding-top: 6px; }
+      .suits { display: flex; justify-content: center; gap: 26px; align-items: center; margin-bottom: 14px; position: relative; }
+      .suits::before, .suits::after {
+        content: ""; flex: 1 1 0; height: 1px; max-width: 200px;
+        background: linear-gradient(90deg, transparent, var(--brass)); box-shadow: 0 2px 0 -1px var(--brass-dark);
+      }
+      .suits::after { background: linear-gradient(90deg, var(--brass), transparent); }
+      .suits span { font: 400 26px var(--text); color: var(--brass); text-shadow: 0 0 14px #c9a24a66; line-height: 1; }
+      .suits .red { color: #b3343c; text-shadow: 0 0 14px #b3343c66; }
+      .foot .bandstand { margin: 0 0 8px; font: italic 500 18px/1.4 var(--text); color: #e0c6a0; }
+      .foot .small { margin: 0; font: 500 15px/1.5 var(--text); color: #8a7a66; max-width: 52ch; margin-inline: auto; }
+      .foot a { color: var(--brass); text-decoration: none; border-bottom: 1px solid var(--brass-dark); }
+      .foot a:hover { color: var(--gold); border-color: var(--gold); }
+      @media (prefers-reduced-motion: reduce) { .bulbs i { animation: none; } }
+      @media (max-width: 520px) { .line { padding: 18px 16px 20px; } .bulbs { padding: 0 12px; } .bulbs i:nth-child(2n) { display: none; } }
+
+      /* ---- The character creator: the stage on the left, the dressing table on the right ---- */
+      .creator {
+        position: fixed; inset: 0; z-index: 3; overflow: auto;
+        display: grid; grid-template-columns: minmax(260px, 1fr) minmax(300px, 420px); gap: 0;
+        background: radial-gradient(ellipse at 30% 40%, #3a0c1a 0%, var(--velvet-deep) 70%);
+        color: var(--cream); font: 500 17px/1.4 var(--text);
+      }
+      .creator .stage { position: relative; min-height: 60vh; }
+      .creator .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      .creator .controls {
+        padding: 36px 32px 48px; box-sizing: border-box; border-left: 1px solid var(--brass-dark);
+        background: linear-gradient(90deg, #1c081200, #1c0812 40px);
+      }
+      .creator h2 { margin: 0 0 18px; font: 400 clamp(26px, 4vw, 34px)/1.15 var(--display); color: var(--cream); text-shadow: 0 0 12px #ffe9b066; }
+      .creator .field { display: block; margin-bottom: 18px; }
+      .creator .field span, .creator legend { display: block; font: 400 13px var(--display); color: var(--brass); letter-spacing: 0.04em; padding: 0; margin-bottom: 8px; }
+      .creator fieldset { border: 0; padding: 0; margin: 0 0 16px; }
+      .creator input:not([type]), .creator input[type=text] {
+        width: 100%; height: 40px; padding: 0 10px; box-sizing: border-box;
+        font: 600 18px var(--text); color: var(--gold); background: #0a0306; border: 0; border-bottom: 2px solid var(--brass); outline: none;
+      }
+      .creator input::placeholder { color: #6a5a48; font-style: italic; font-weight: 500; }
+      .creator input[type=range] { width: 100%; accent-color: var(--brass); }
+      .creator .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+      .creator .swatch input { position: absolute; opacity: 0; width: 0; height: 0; }
+      .creator .swatch span { display: block; width: 34px; height: 34px; border-radius: 50%; border: 2px solid #5a4520; cursor: pointer; box-shadow: 0 2px 0 #000a; }
+      .creator .swatch input:checked + span { border-color: var(--gold); box-shadow: 0 0 10px var(--gold), 0 2px 0 #000a; }
+      .creator .swatch input:focus-visible + span { outline: 2px solid var(--gold); outline-offset: 2px; }
+      .creator .row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+      .creator .row button {
+        height: 44px; padding: 0 18px; cursor: pointer; font: 400 15px var(--display); color: var(--cream); letter-spacing: 0.03em;
+        background: #3a2a18; border: 1px solid var(--brass); border-radius: 2px; box-shadow: 0 1px 0 #ffe9b055 inset, 0 3px 0 #00000088;
+      }
+      .creator .save { background: #1f5f3a; }
+      .creator .cancel { background: none; border-color: var(--brass-dark); color: #d9c6a8; }
+      .creator .row button:hover { filter: brightness(1.15); }
+      @media (max-width: 720px) { .creator { grid-template-columns: 1fr; } .creator .stage { min-height: 46vh; } .creator .controls { border-left: 0; border-top: 1px solid var(--brass-dark); } }
+
+      /* The band's note, in the corner. */
+      .mute {
+        position: fixed; top: 14px; right: 14px; z-index: 1; height: 38px; min-width: 38px; padding: 0 10px; cursor: pointer;
+        font: 700 18px var(--text); color: var(--gold); background: #160610cc; border: 1px solid var(--brass); border-radius: 19px;
+      }
+      .mute.off { color: var(--dim); border-color: var(--brass-dark); text-decoration: line-through; }
+      .mute:hover { filter: brightness(1.2); }
+
+      /* ---- The action bar: velvet and brass, like the room. Buttons keep the rail's colours. */
+      .actions {
+        position: fixed; left: 0; right: 0; bottom: 0; z-index: 1;
+        display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 10px;
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+        white-space: nowrap;
+        background: linear-gradient(#2a0a14f2, #160610f7);
+        border-top: 2px solid var(--brass);
+        box-shadow: 0 -1px 0 #5a4520 inset, 0 -12px 30px #00000080;
+        font: 400 16px var(--display); letter-spacing: 0.03em; font-variant-numeric: tabular-nums;
+      }
+      .actions .n { font: 700 20px var(--text); font-variant-numeric: tabular-nums; letter-spacing: 0; }
+      .actions[hidden] { display: none; }
+      .actions button {
+        appearance: none; cursor: pointer; min-width: 64px; height: 46px; padding: 0 20px;
+        color: var(--cream); font: inherit;
+        border: 1px solid var(--brass); border-radius: 4px;
+        background: #3a2a18;
+        box-shadow: 0 1px 0 #ffe9b066 inset, 0 3px 0 #00000066;
+        transition: transform 80ms, filter 120ms;
+      }
+      .actions button:hover:not(:disabled) { filter: brightness(1.15); }
+      .actions button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 #ffe9b066 inset; }
+      .actions button:disabled { opacity: 0.35; cursor: default; }
+      .actions button[hidden] { display: none; }
+      .actions button[data-key]::after {
+        content: attr(data-key); margin-left: 10px; padding: 0 5px;
+        font: 600 11px var(--text); color: var(--brass); border: 1px solid #c9a24a80; border-radius: 3px; vertical-align: 1px;
+      }
+      .actions .fold { background: #6e1420; }
+      .actions .call { background: #1f5f3a; min-width: 130px; font-variant-numeric: tabular-nums; }
+      .actions .raise { background: #8a6a1c; min-width: 110px; }
+      .actions .show { background: #2a3a6e; }
+      .actions .step { min-width: 46px; padding: 0; font: 700 24px var(--text); }
+      .actions .amount { min-width: 120px; color: var(--gold); background: #1a0810; cursor: default; font: 700 20px var(--text); font-variant-numeric: tabular-nums; }
+      .actions .clock {
+        min-width: 90px; margin-right: 14px; color: var(--gold); background: transparent; border-color: transparent;
+        box-shadow: none; cursor: default; font: 700 26px var(--text); font-variant-numeric: tabular-nums;
+      }
+      .actions .clock.bank { color: #ff9a6b; }
+      .actions .clock:empty { display: none; }
+      @media (max-width: 640px) {
+        .actions { gap: 6px; padding: 8px 8px calc(8px + env(safe-area-inset-bottom)); font-size: 13px; }
+        .actions button { height: 40px; padding: 0 12px; min-width: 0; }
+        .actions .call, .actions .raise, .actions .amount { min-width: 0; }
+        .actions .clock { margin-right: 0; font-size: 20px; }
+        .actions button[data-key]::after { display: none; }
+      }
     </style>
   </head>
   <body>

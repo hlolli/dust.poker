@@ -19,6 +19,13 @@ export function seatPose(i: number): { position: THREE.Vector3; yaw: number } {
   };
 }
 
+/** The dealer stands at the rail between seats 3 and 4, across from seat 0, facing the centre. */
+export const DEALER_POSE = (() => {
+  const a = (3.5 / SEAT_COUNT) * Math.PI * 2;
+  const r = TABLE_RADIUS + 0.35;
+  return { position: new THREE.Vector3(Math.sin(a) * r, 0, Math.cos(a) * r), yaw: a };
+})();
+
 export function createTable(): THREE.Group {
   const g = new THREE.Group();
   g.name = "table";
