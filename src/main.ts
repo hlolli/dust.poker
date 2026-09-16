@@ -4,7 +4,7 @@ import { VRButton } from "three/addons/webxr/VRButton.js";
 import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
 import { createSeat } from "./scene/avatar.ts";
 import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseSeated, poseStanding } from "./scene/avatars.ts";
-import { BARTENDER_POSE, createBar } from "./scene/bar.ts";
+import { BAR, BARTENDER_POSE, createBar } from "./scene/bar.ts";
 import bartenderUrl from "./assets/avatars/Business_Male_02.glb";
 import youUrl from "./assets/avatars/Business_Male_01.glb";
 import bot1Url from "./assets/avatars/Business_Female_02.glb";
@@ -13,6 +13,7 @@ import bot3Url from "./assets/avatars/Female_Party_01.glb";
 import bot4Url from "./assets/avatars/Business_Male_06.glb";
 import bot5Url from "./assets/avatars/Female_Party_02.glb";
 import { attachControls } from "./scene/controls.ts";
+import { type Lounge, startLounge } from "./scene/lounge.ts";
 import { Rail } from "./scene/rail.ts";
 import { createRoom } from "./scene/room.ts";
 import { createSplash } from "./scene/splash.ts";
@@ -124,6 +125,20 @@ function moveRigTo(to: THREE.Vector3, yaw: number, ms: number, then?: () => void
 
 let onSelect: (hit: THREE.Object3D) => void = () => {};
 const controls = attachControls(renderer, camera, rig, (hit) => onSelect(hit));
+
+// The band plays from the bar, from the first click on (browsers want a gesture first). M mutes.
+let lounge: Lounge | null = null;
+renderer.domElement.addEventListener(
+  "pointerdown",
+  () => {
+    lounge = startLounge(camera, scene, new THREE.Vector3(BAR.x - 1.2, 1.4, BAR.z));
+    Object.assign(window as unknown as Record<string, unknown>, { __lounge: lounge });
+  },
+  { once: true },
+);
+window.addEventListener("keydown", (e) => {
+  if (e.key === "m" || e.key === "M") lounge?.setMuted(!lounge.muted);
+});
 
 onSelect = (hit) => {
   if (hit !== practiceDoor) return;

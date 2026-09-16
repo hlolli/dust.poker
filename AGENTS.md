@@ -7,7 +7,7 @@ Bun for everything: `bun install`, `bun dev` (dev server, hot reload), `bun test
 Layout:
 
 - `src/index.html`, `src/main.ts` -- entry; the only place that touches `document` and the renderer
-- `src/scene/` -- Three.js: room, table, seats, rail controls, avatars
+- `src/scene/` -- Three.js: room, table, seats, rail controls, avatars; `lounge.ts` is the generated Web Audio lounge loop, positioned at the bar
 - `src/poker/` -- pure TypeScript poker: cards, hand ranking, payouts, bots; no Three.js, no I/O. The betting rules live in the contract, not here
 - `src/referee/` -- the `TableState` / `act()` seam; `contract.ts` runs the compiled deal contract locally with bots in the other seats (the Practice table; the live one adds a chain and proofs)
 - `src/compact/` -- the shim that loads the on-chain runtime's wasm in the browser; `scripts/wasm-plugin.ts` points the runtime's package name at it for the dev server (`bunfig.toml`) and the site build (`scripts/build-site.ts`)
