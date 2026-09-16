@@ -117,7 +117,7 @@ const addr = (seat: number) => new Uint8Array(32).fill(seat + 1);
 let state: Parameters<typeof createCircuitContext>[3] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
 const preimages = new Map<string, Uint8Array>();
 type Arg = bigint | bigint[] | Uint8Array;
-async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release" | "show_hand" | "settle", ...z: Arg[]) {
+async function run(contract: Contract<PS>, circuit: "join" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release" | "show_hand" | "settle", ...z: Arg[]) {
   const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS, undefined, undefined, undefined, now);
   const r = await (contract.circuits[circuit] as (c: typeof ctx, ...y: Arg[]) => Promise<any>)(ctx, ...z);
   state = r.context.callContext.currentQueryContext.state;
@@ -125,8 +125,8 @@ async function run(contract: Contract<PS>, circuit: "sit" | "start_deal" | "post
   const pd = r.context.callProofDataTrace.at(-1)!;
   if (contract === a) preimages.set(circuit, proofDataIntoSerializedPreimage(pd.input, pd.output, pd.publicTranscript, pd.privateTranscriptOutputs, circuit));
 }
-await run(a, "sit", 0n, addr(0), 200n);
-await run(b, "sit", 1n, addr(1), 200n);
+await run(a, "join", addr(0), 200n); // seat 0
+await run(b, "join", addr(1), 200n); // seat 1
 await run(a, "start_deal", BigInt(now));
 await run(a, "post_key", 0n, BigInt(now));
 await run(b, "post_key", 1n, BigInt(now));

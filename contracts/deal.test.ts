@@ -22,9 +22,9 @@ const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "buy_in" | "leave" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
+type Circuit = "join" | "buy_in" | "leave" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
 type Arg = bigint | bigint[] | Uint8Array;
-const UNTIMED = new Set<Circuit>(["sit", "buy_in", "leave", "expire", "settle", "settle_abort"]);
+const UNTIMED = new Set<Circuit>(["join", "buy_in", "leave", "expire", "settle", "settle_abort"]);
 /** The payout address of a seat in these tests. */
 const addr = (seat: number) => new Uint8Array(32).fill(seat + 1);
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
@@ -82,9 +82,10 @@ class Table {
   static async seated(n: number, players = Array.from({ length: n }, () => player())): Promise<Table> {
     const t = new Table(players);
     t.state = (await players[0]!.contract.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
+    // The referee seats joiners at the first empty seat, so player i lands on seat i.
     for (let i = 0; i < players.length; i++) {
       players[i]!.seat = i;
-      await t.call(i, "sit", BigInt(i), addr(i), 200n);
+      expect(await t.call(i, "join", addr(i), 200n)).toBe(BigInt(i));
     }
     return t;
   }
@@ -500,16 +501,17 @@ test("a player who does not show in time aborts the deal on themselves", async (
 
 test("stakes: buy-in and bond come in with the seat, stack and bond go home on leaving", async () => {
   const t = await Table.seated(2);
-  expect(t.received).toBe(400n); // the last sit: 200 buy-in and the 200 bond
+  expect(t.received).toBe(400n); // the last join: 200 buy-in and the 200 bond
+  await t.refuses(1, "join", /already seated/, addr(1), 200n);
   await t.call(0, "leave", 0n);
   expect(t.paidTo(addr(0))).toBe(400n);
   expect(t.ledger.seat_owner.member(0n)).toBe(false);
   expect(t.ledger.stack[0]).toBe(0n);
   await t.refuses(0, "leave", /empty seat/, 0n);
-  // The seat can be taken again, with any buy-in in range.
-  await t.refuses(0, "sit", /out of range/, 0n, addr(0), 79n);
-  await t.refuses(0, "sit", /out of range/, 0n, addr(0), 201n);
-  await t.call(0, "sit", 0n, addr(0), 80n);
+  // The freed seat is the first empty one, so the same player lands on it again.
+  await t.refuses(0, "join", /out of range/, addr(0), 79n);
+  await t.refuses(0, "join", /out of range/, addr(0), 201n);
+  expect(await t.call(0, "join", addr(0), 80n)).toBe(0n);
   expect(t.received).toBe(280n);
   expect(t.ledger.stack[0]).toBe(80n);
   await t.call(0, "buy_in", 0n, 50n);
@@ -521,6 +523,24 @@ test("stakes: buy-in and bond come in with the seat, stack and bond go home on l
   expect(t.ledger.phase).toBe(Phase.done);
   await t.call(1, "leave", 1n);
   expect(t.paidTo(addr(1))).toBe(BigInt(200 + 1 + 200)); // stack after winning the small blind, plus the bond
+}, 60_000);
+
+test("the referee seats: six fill the table, a seventh is refused, a leaver's seat goes to the next joiner", async () => {
+  const t = await Table.seated(6);
+  const seventh = player();
+  seventh.seat = 6;
+  const late = new Table([...t.players, seventh]);
+  late.state = t.state;
+  await late.refuses(6, "join", /table full/, addr(6), 200n);
+  await late.call(3, "leave", 3n);
+  expect(await late.call(6, "join", addr(6), 200n)).toBe(3n);
+  seventh.seat = 3;
+  // Joining during a deal is allowed; the joiner sits that one out.
+  await late.call(6, "leave", 3n); // the seventh player, now on seat 3, leaves again
+  await late.call(0, "start_deal");
+  expect(await late.call(6, "join", addr(6), 200n)).toBe(3n);
+  expect(late.ledger.in_deal[3]).toBe(false);
+  expect(late.ledger.n_players).toBe(5n);
 }, 60_000);
 
 test("buying in again: between deals or while sitting out, up to the maximum", async () => {

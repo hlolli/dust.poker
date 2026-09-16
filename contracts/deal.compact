@@ -2,8 +2,8 @@
 // on top of it. See docs/protocol/dealing.md.
 //
 // One deal at a time (pipelining later). Phases:
-//   sit, buy_in  a seat, paying the buy-in and the bond into escrow; more chips between
-//                deals, up to the maximum buy-in
+//   join, buy_in the referee seats the caller (players never choose a seat), the buy-in
+//                and the bond paid into escrow; more chips between deals, up to the maximum
 //   leave        stack and bond back to the player's address, while not in a deal
 //   start_deal   idle or done -> keys; the players are the seats with chips now; the dealer
 //                button moves, the blinds are posted
@@ -35,7 +35,11 @@
 //
 // Deadlines are block time in seconds. A caller states `now`; the contract checks it against
 // the block (blockTimeGte, blockTimeLt) to within CLOCK_SLACK and sets the next deadline
-// from it. sit() is a stand-in for seating.compact until the two merge.
+// from it.
+//
+// One table (v1). With a pool of tables, join picks the table too: the one where the caller
+// has sat with the fewest of those present, then the emptiest (the design session's
+// weighted seating; the two-table version lived in seating.compact until 307da58).
 
 import CompactStandardLibrary;
 
@@ -69,8 +73,7 @@ circuit BOND(): Uint<64> { return MAX_BUY_IN(); }
 // The one asset staked at this table.
 export ledger asset: Bytes<32>;
 // Seats: seat -> the player's key point. A player's identity is ecMulGenerator(secret):
-// 360 rows, against 3,900 for the SHA-256 identity in seating.compact, which switches to
-// this at the merge.
+// 360 rows, against 3,900 for a SHA-256 identity.
 export ledger seat_owner: Map<Uint<8>, JubjubPoint>;
 // seat -> the address stack and bond go back to
 export ledger payout_address: Map<Uint<8>, Bytes<32>>;
@@ -286,18 +289,22 @@ circuit not_dealing(s: Uint<8>): Boolean {
   return !dealing || !at_b(in_deal, s);
 }
 
-// Takes a seat: the buy-in and the bond come into escrow with the transaction, and the
-// address they go back to is recorded.
-export circuit sit(seat: Uint<8>, address: Bytes<32>, buy: Uint<64>): [] {
-  const s = disclose(seat);
+// Joins the table: the referee seats the caller at the first empty seat and returns it. The
+// buy-in and the bond come into escrow with the transaction, and the address they go back
+// to is recorded. A player joining during a deal sits out until the next one.
+export circuit join(address: Bytes<32>, buy: Uint<64>): Uint<8> {
   const b = disclose(buy);
-  assert(s < 6, "no such seat");
-  assert(!seat_owner.member(s), "seat taken");
+  const who = disclose(me());
   assert(b >= MIN_BUY_IN() && b <= MAX_BUY_IN(), "buy-in out of range");
+  const seated = fold((acc: Boolean, k: Uint<8>): Boolean => (acc || (seat_owner.member(k) && seat_owner.lookup(k) == who)), false, seats());
+  assert(!seated, "already seated");
+  const s = fold((acc: Uint<8>, k: Uint<8>): Uint<8> => ((acc == NONE() && !seat_owner.member(k)) ? k : acc), NONE(), seats());
+  assert(s != NONE(), "table full");
   receiveUnshielded(asset, (b + BOND()) as Uint<128>);
-  seat_owner.insert(s, disclose(me()));
+  seat_owner.insert(s, who);
   payout_address.insert(s, disclose(address));
   stack = set_u(stack, s, b);
+  return s;
 }
 
 // Buys in again: adds chips to the caller's stack, up to the maximum buy-in, while the seat

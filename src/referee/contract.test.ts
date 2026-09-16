@@ -4,7 +4,7 @@ import type { TableState } from "./types.ts";
 
 test("the contract referee deals through the circuits, hides other hole cards, and bots play to a result", async () => {
   const ref = new ContractReferee({
-    names: ["You", "Dean", "Frank", null, "Sammy", "Peggy"],
+    names: ["You", "Dean", "Frank", "Sammy", "Peggy"],
     you: 0,
     botDelay: [0, 0],
     betweenDeals: 60_000,
@@ -26,7 +26,8 @@ test("the contract referee deals through the circuits, hides other hole cards, a
   const preflop = states.find((s) => s.street === "preflop")!;
   expect(preflop.seats[0]!.hole).toHaveLength(2);
   expect(preflop.seats[1]!.hole).toBeNull();
-  expect(preflop.seats[3]!.name).toBeNull();
+  expect(preflop.seats[5]!.name).toBeNull(); // five joined, the referee filled seats 0 to 4
+  expect(preflop.seats[3]!.name).toBe("Sammy");
   expect(preflop.pot).toBe(3);
   expect(preflop.dealer).toBe(0);
 

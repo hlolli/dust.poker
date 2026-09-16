@@ -13,8 +13,9 @@ import type { Action, Legal, Referee, SeatView, Street, TableState } from "./typ
 // only betting decisions wait for a human.
 
 export interface ContractOptions {
-  /** null for an empty seat. */
-  names: (string | null)[];
+  /** The players, in the order they join; the referee seats them at the first empty seat each time. */
+  names: string[];
+  /** Your index in `names`. */
   you: number;
   /** Bot think time and pause between deals, in ms. */
   botDelay?: [number, number];
@@ -23,9 +24,9 @@ export interface ContractOptions {
 
 type PS = Record<string, never>;
 type State = Parameters<typeof createCircuitContext>[3];
-type Circuit = "sit" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "settle_abort";
+type Circuit = "join" | "buy_in" | "start_deal" | "post_key" | "shuffle" | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "settle_abort";
 type Arg = bigint | bigint[] | Uint8Array;
-const UNTIMED = new Set<Circuit>(["sit", "buy_in", "settle", "settle_abort"]);
+const UNTIMED = new Set<Circuit>(["join", "buy_in", "settle", "settle_abort"]);
 const MIN_BUY_IN = 80;
 const MAX_BUY_IN = 200;
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
@@ -57,12 +58,14 @@ function randomPermutation(): number[] {
 const ten = (positions: number[]): bigint[] => Array.from({ length: 10 }, (_, i) => BigInt(positions[Math.min(i, positions.length - 1)]!));
 const seatsOf = (l: Ledger) => [0, 1, 2, 3, 4, 5].filter((i) => l.in_deal[i]);
 
-/** One seat's private state and its view of the contract. A fresh deck key every deal. */
+/** One player's private state and its view of the contract. A fresh deck key every deal. */
 class Seat {
   readonly contract: Contract<PS>;
   x = randomScalar();
+  /** The seat the referee gave this player; -1 until joined. */
+  index = -1;
 
-  constructor(readonly index: number) {
+  constructor(readonly name: string) {
     const secret = randomScalar();
     this.contract = new Contract<PS>({
       player_secret: (ctx) => [ctx.privateState, secret],
@@ -77,18 +80,19 @@ class Seat {
     });
   }
 
-  /** Where this seat's stack and bond go back to. Practice chips go nowhere real. */
-  get address(): Uint8Array {
-    return new Uint8Array(32).fill(this.index + 1);
-  }
+  /** Where this player's stack and bond go back to. Practice chips go nowhere real. */
+  readonly address = crypto.getRandomValues(new Uint8Array(32));
 }
 
 export class ContractReferee implements Referee {
-  private readonly names: (string | null)[];
-  private readonly you: number;
+  /** Seat -> name, as the referee seated the players; null for an empty seat. */
+  private readonly names: (string | null)[] = [null, null, null, null, null, null];
+  private you = -1;
+  private readonly players: Seat[];
+  private readonly yourIndex: number;
   private readonly botDelay: [number, number];
   private readonly betweenDeals: number;
-  private readonly seats: (Seat | null)[];
+  private readonly seats: (Seat | null)[] = [null, null, null, null, null, null];
   private state: State | null = null;
   private lastAction: (string | null)[];
   private message = "";
@@ -101,18 +105,27 @@ export class ContractReferee implements Referee {
   private stopped = false;
 
   constructor(o: ContractOptions) {
-    this.names = o.names;
-    this.you = o.you;
+    this.players = o.names.map((n) => new Seat(n));
+    this.yourIndex = o.you;
     this.botDelay = o.botDelay ?? [700, 1600];
     this.betweenDeals = o.betweenDeals ?? 4000;
-    this.seats = o.names.map((n, i) => (n === null ? null : new Seat(i)));
-    this.lastAction = o.names.map(() => null);
+    this.lastAction = this.names.map(() => null);
   }
 
   async start() {
-    const first = this.seats.find((s) => s)!;
+    const first = this.players[0]!;
     this.state = (await first.contract.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
-    for (const s of this.seats) if (s) await this.call(s.index, "sit", BigInt(s.index), s.address, BigInt(MAX_BUY_IN));
+    // Everyone joins in turn; the contract hands out the seats.
+    for (const [i, p] of this.players.entries()) {
+      // join is called on this player's contract by their own (not yet seated) index.
+      const ctx = createCircuitContext("join", address, coinPublicKey, this.state!, {} as PS);
+      const r = await p.contract.circuits.join(ctx, p.address, BigInt(MAX_BUY_IN));
+      this.state = r.context.callContext.currentQueryContext.state;
+      p.index = Number(r.result);
+      this.seats[p.index] = p;
+      this.names[p.index] = p.name;
+      if (i === this.yourIndex) this.you = p.index;
+    }
     this.publish();
     await this.nextDeal();
   }
@@ -223,7 +236,7 @@ export class ContractReferee implements Referee {
     this.winners = [];
     this.lastStreet = -1n;
     try {
-      await this.call(this.seats.findIndex((s) => s), "start_deal");
+      await this.call(this.players[0]!.index, "start_deal");
     } catch (e) {
       // Fewer than two seats with chips: the game is over.
       this.message = "Game over";
@@ -306,7 +319,7 @@ export class ContractReferee implements Referee {
             await this.call(live[0]!, "settle");
             break;
           case Phase.aborted:
-            await this.call(this.seats.findIndex((s) => s && l.seat_owner.member(BigInt(s.index))), "settle_abort");
+            await this.call(this.players[0]!.index, "settle_abort"); // permissionless; any contract instance will do
             break;
           default: {
             // done: say who won, pause, deal again.
