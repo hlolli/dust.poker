@@ -71,9 +71,14 @@ circuit TABLING_SECONDS(): Uint<64> { return 60; }
 // Preparing the next deck runs alongside a deal, so its budgets are looser.
 circuit PREP_KEYS_SECONDS(): Uint<64> { return 180; }
 circuit PREP_SHUFFLE_SECONDS(): Uint<64> { return 480; }
-// The betting clock. ponytail: no time bank yet; add one per deal when the client has a clock.
+// The betting clock: 30 s per action, plus a 30 s time bank per deal that late actions draw on.
 circuit ACT_SECONDS(): Uint<64> { return 30; }
-circuit CLOCK_SLACK(): Uint<64> { return 120; }
+circuit TIME_BANK_SECONDS(): Uint<64> { return 30; }
+// A caller's stated `now` must sit within this of the block time. Every deadline is set
+// from now + CLOCK_SLACK, so a stated now behind the block never shortens another
+// player's time by more than nothing: the deadline is always at least the budget after the
+// block. Small, so that an understated now buys little time-bank relief either.
+circuit CLOCK_SLACK(): Uint<64> { return 20; }
 circuit NONE(): Uint<8> { return 255; }
 circuit BIG_BLIND(): Uint<64> { return 2; }
 // Buy-in range, 40 to 100 big blinds: a seat sits down with a stack in it and may buy in
@@ -113,6 +118,8 @@ export ledger total: Vector<6, Uint<64>>; // committed this deal
 export ledger folded: Vector<6, Boolean>;
 export ledger all_in: Vector<6, Boolean>;
 export ledger acted: Vector<6, Boolean>; // has acted since the last full raise this street
+export ledger bank: Vector<6, Uint<64>>; // time bank left this deal, per seat
+export ledger act_by: Uint<64>; // when the actor's 30 s are up; `deadline` adds their bank
 
 // The deck for the current deal: 52 locked cards.
 export ledger deck: Vector<52, Locked>;
@@ -219,6 +226,18 @@ circuit owner_check(s: Uint<8>): [] {
 circuit check_now(now: Uint<64>): [] {
   assert(blockTimeGte(now), "clock ahead of the chain");
   assert(blockTimeLt((now + CLOCK_SLACK()) as Uint<64>), "clock behind the chain");
+}
+
+// A deadline `budget` seconds after the block, whatever `now` the caller stated within the slack.
+circuit due(now: Uint<64>, budget: Uint<64>): Uint<64> {
+  return (now + CLOCK_SLACK() + budget) as Uint<64>;
+}
+
+// Hands the action to seat s: 30 seconds, and their time bank on top.
+circuit set_turn(s: Uint<8>, now: Uint<64>): [] {
+  to_act = s;
+  act_by = due(now, ACT_SECONDS());
+  deadline = (act_by + at_u(bank, s)) as Uint<64>;
 }
 
 // Vectors are indexed by constants only; these select and replace by a runtime seat.
@@ -418,7 +437,7 @@ circuit begin_prep(now: Uint<64>, present: Vector<6, Boolean>, n: Uint<8>): [] {
   next_keys_posted.resetToDefault();
   next_turn = NONE();
   next_prep = n >= 2 ? Prep.keys : Prep.none;
-  next_deadline = (now + PREP_KEYS_SECONDS()) as Uint<64>;
+  next_deadline = due(now, PREP_KEYS_SECONDS());
 }
 
 // Anyone may start a deal. The players are whoever is seated with chips; the button moves
@@ -474,6 +493,7 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
   folded = falses();
   all_in = a1;
   acted = falses();
+  bank = map((s: Uint<8>): Uint<64> => TIME_BANK_SECONDS(), seats());
   street = 0;
   current_bet = BIG_BLIND();
   min_raise = BIG_BLIND();
@@ -481,10 +501,10 @@ export circuit start_deal(claimed_now: Uint<64>): [] {
 
   if (prepared) {
     phase = Phase.holes;
-    deadline = (now + HOLES_SECONDS()) as Uint<64>;
+    deadline = due(now, HOLES_SECONDS());
   } else {
     phase = Phase.keys;
-    deadline = (now + KEYS_SECONDS()) as Uint<64>;
+    deadline = due(now, KEYS_SECONDS());
   }
   // And the deck for the deal after this one, for whoever is here with chips now.
   begin_prep(now, present, n);
@@ -506,7 +526,7 @@ export circuit post_key(seat: Uint<8>, claimed_now: Uint<64>): JubjubPoint {
   if (keys_posted == n_players as Uint<64>) {
     phase = Phase.shuffle;
     turn = first_in_deal();
-    deadline = (now + SHUFFLE_SECONDS()) as Uint<64>;
+    deadline = due(now, SHUFFLE_SECONDS());
   }
   return p;
 }
@@ -528,7 +548,7 @@ export circuit post_next_key(seat: Uint<8>, claimed_now: Uint<64>): JubjubPoint 
   if (next_keys_posted == next_n_players as Uint<64>) {
     next_prep = Prep.shuffle;
     next_turn = first_in(next_in_deal);
-    next_deadline = (now + PREP_SHUFFLE_SECONDS()) as Uint<64>;
+    next_deadline = due(now, PREP_SHUFFLE_SECONDS());
   }
   return p;
 }
@@ -577,10 +597,10 @@ export circuit shuffle(seat: Uint<8>, claimed_now: Uint<64>): [] {
   const nxt = next_seat_in_deal(s);
   if (nxt == NONE()) {
     phase = Phase.holes;
-    deadline = (now + HOLES_SECONDS()) as Uint<64>;
+    deadline = due(now, HOLES_SECONDS());
   } else {
     turn = nxt;
-    deadline = (now + SHUFFLE_SECONDS()) as Uint<64>;
+    deadline = due(now, SHUFFLE_SECONDS());
   }
 }
 
@@ -601,7 +621,7 @@ export circuit shuffle_next(seat: Uint<8>, claimed_now: Uint<64>): [] {
     next_deadline = 0;
   } else {
     next_turn = nxt;
-    next_deadline = (now + PREP_SHUFFLE_SECONDS()) as Uint<64>;
+    next_deadline = due(now, PREP_SHUFFLE_SECONDS());
   }
 }
 
@@ -666,15 +686,15 @@ circuit close_street(now: Uint<64>, f: Vector<6, Boolean>, a: Vector<6, Boolean>
   to_act = NONE();
   if (street == 3) {
     phase = Phase.showdown;
-    deadline = (now + SHOWDOWN_SECONDS()) as Uint<64>;
+    deadline = due(now, SHOWDOWN_SECONDS());
   } else {
     if (actor_count(f, a) <= 1) {
       phase = Phase.tabling;
-      deadline = (now + TABLING_SECONDS()) as Uint<64>;
+      deadline = due(now, TABLING_SECONDS());
     } else {
       release_street = (street + 1) as Uint<8>;
       phase = Phase.release;
-      deadline = (now + RELEASE_SECONDS()) as Uint<64>;
+      deadline = due(now, RELEASE_SECONDS());
     }
   }
 }
@@ -685,11 +705,11 @@ circuit run_out(now: Uint<64>): [] {
   if (released(folded, 3)) {
     street = 3;
     phase = Phase.showdown;
-    deadline = (now + SHOWDOWN_SECONDS()) as Uint<64>;
+    deadline = due(now, SHOWDOWN_SECONDS());
   } else {
     release_street = 3;
     phase = Phase.release;
-    deadline = (now + RELEASE_SECONDS()) as Uint<64>;
+    deadline = due(now, RELEASE_SECONDS());
   }
 }
 
@@ -704,8 +724,7 @@ circuit resume_betting(now: Uint<64>): [] {
   const a = all_in;
   if (actor_count(f, a) > 1) {
     phase = Phase.playing;
-    to_act = next_actor(dealer, f, a);
-    deadline = (now + ACT_SECONDS()) as Uint<64>;
+    set_turn(next_actor(dealer, f, a), now);
   } else {
     close_street(now, f, a);
   }
@@ -746,7 +765,7 @@ export circuit shares(seat: Uint<8>, positions: Vector<10, Uint<8>>, claimed_now
     holes_done.increment(1);
     if (holes_done == n as Uint<64>) {
       phase = Phase.playing;
-      deadline = (now + ACT_SECONDS()) as Uint<64>;
+      set_turn(to_act, now);
     }
   }
 }
@@ -829,19 +848,23 @@ circuit apply_action(s: Uint<8>, kind: Uint<8>, t: Uint<64>, amount: Uint<64>, o
     deadline = 0;
   } else {
     if (round_open(f, a, ac, b, nb)) {
-      to_act = next_actor(s, f, a);
-      deadline = (now + ACT_SECONDS()) as Uint<64>;
+      set_turn(next_actor(s, f, a), now);
     } else {
       close_street(now, f, a);
     }
   }
 }
 
+// The actor is the seat's owner and it is their turn; the seconds past their 30 come out of
+// their time bank (an action later than the bank allows still stands if nobody expired it).
 circuit act_check(s: Uint<8>, now: Uint<64>): [] {
   assert(phase == Phase.playing, "no betting now");
   owner_check(s);
   assert(s == to_act, "not your turn to act");
   check_now(now);
+  const over = now > act_by ? (now - act_by) as Uint<64> : 0;
+  const left = at_u(bank, s);
+  bank = set_u(bank, s, (left - min_u(over, left)) as Uint<64>);
 }
 
 // Check (0), call (1) or raise to `to` (2), leaving chips behind. An action that would

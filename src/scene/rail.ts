@@ -19,6 +19,8 @@ export class Rail {
   private readonly plus = new Label("+", { width: 0.09, background: "#3a2a18", ...BTN });
   private readonly amount = new Label("", { width: 0.18, color: "#ffe9b0", font: "bold 72px Georgia, serif", canvas: [512, 128] });
   private readonly show = new Label("SHOW", { width: 0.22, background: "#2a3a6e", ...BTN });
+  // The clock: seconds left to act, and the time bank behind them, ticking once a second.
+  private readonly clock = new Label("", { width: 0.5, color: "#ffe9b0", font: "bold 90px Georgia, serif", canvas: [512, 128] });
   private state: TableState | null = null;
   private raiseTo = 0;
 
@@ -46,6 +48,8 @@ export class Rail {
     place(this.amount, 0.33, -0.32, 0.85);
     place(this.plus, 0.47, -0.32, 0.85);
     place(this.show, -0.32, -0.32, 0.85);
+    place(this.clock, -0.62, -0.4, 0.92); // left of FOLD, clear of the cards in your hands
+    setInterval(() => this.tick(), 1000);
 
     const handlers = new Map<THREE.Object3D, () => void>([
       [this.fold.mesh, () => this.state?.legal && act({ type: "fold" })],
@@ -86,6 +90,19 @@ export class Rail {
     this.state = s;
     if (s.legal && !wasMyTurn) this.raiseTo = s.legal.raise?.min ?? 0;
     this.render();
+    this.tick();
+  }
+
+  /** Your seconds left when it is your turn: the 30 first, then the bank, in a warmer colour. */
+  private tick() {
+    const s = this.state;
+    if (!s?.legal || s.deadline === null) {
+      this.clock.set("");
+      return;
+    }
+    const left = Math.max(0, s.deadline - Math.floor(Date.now() / 1000));
+    const onBank = left <= s.timeBank;
+    this.clock.set(onBank ? `BANK ${left}` : `${left - s.timeBank}`, { color: onBank ? "#ff9a6b" : "#ffe9b0" });
   }
 
   private render() {

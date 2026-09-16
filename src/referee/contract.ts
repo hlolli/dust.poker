@@ -32,6 +32,10 @@ const UNTIMED = new Set<Circuit>(["join", "buy_in", "settle", "settle_abort"]);
 const Prep = { none: 0, keys: 1, shuffle: 2, ready: 3 };
 const MIN_BUY_IN = 80;
 const MAX_BUY_IN = 200;
+// The contract sets every deadline this much after the stated clock, so that a stale clock
+// cannot shorten anyone's time; a client must have acted this much before the contract's
+// deadline, which on a live table is the time a transaction needs to land.
+const CLOCK_SLACK = 20;
 const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
 const STREETS: Street[] = ["preflop", "flop", "turn", "river"];
 const BOARD_LEN = [0, 3, 4, 5];
@@ -162,6 +166,8 @@ export class ContractReferee implements Referee {
   async act(action: Action) {
     const l = this.ledger;
     if (l.phase !== Phase.playing || Number(l.to_act) !== this.you) throw new Error("not your turn");
+    if (this.timer) clearTimeout(this.timer); // the auto-fold at the deadline
+    this.timer = null;
     await this.perform(this.you, action);
     await this.drive();
   }
@@ -336,7 +342,18 @@ export class ContractReferee implements Referee {
             this.message = "";
             const s = Number(l.to_act);
             this.publish();
-            if (s === this.you) return;
+            if (s === this.you) {
+              // Check-else-fold when the clock (30 s plus the time bank) runs out: the client's
+              // convenience, since the contract cannot fold an absent player (ADR 0006).
+              const left = Number(l.deadline) - CLOCK_SLACK - Math.floor(Date.now() / 1000);
+              this.timer = setTimeout(async () => {
+                this.timer = null;
+                if (this.stopped || this.ledger.phase !== Phase.playing || Number(this.ledger.to_act) !== this.you) return;
+                await this.perform(this.you, this.legal(this.you).check ? { type: "check" } : { type: "fold" });
+                await this.drive();
+              }, Math.max(0, left) * 1000);
+              return;
+            }
             const [lo, hi] = this.botDelay;
             this.timer = setTimeout(async () => {
               this.timer = null;
@@ -419,6 +436,8 @@ export class ContractReferee implements Referee {
         bigBlind: BIG_BLIND,
         message: "",
         canShow: false,
+        deadline: null,
+        timeBank: 0,
       };
     }
     const l = this.ledger;
@@ -470,6 +489,8 @@ export class ContractReferee implements Referee {
       bigBlind: BIG_BLIND,
       message: this.message,
       canShow: this.canShow(l),
+      deadline: phase === Phase.playing && l.deadline !== 0n ? Number(l.deadline) - CLOCK_SLACK : null,
+      timeBank: this.you >= 0 ? Number(l.bank[this.you]) : 0,
     };
   }
 }

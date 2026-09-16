@@ -78,6 +78,10 @@ _Avoid_: Bank, prize
 A single move by a seat on its turn: fold, check, call, bet, raise.
 _Avoid_: Move, play, bet (as the general term)
 
+**Time bank**:
+Extra seconds a seat may spend over a deal on top of the thirty each action gets, used up as it goes over; refilled every deal.
+_Avoid_: Timeout extension, grace period, clock
+
 ### Dealing
 
 **Deck**:

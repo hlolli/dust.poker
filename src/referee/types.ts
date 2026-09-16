@@ -33,6 +33,13 @@ export interface TableState {
   message: string;
   /** You may open your own hole cards to the table now (the deal is over and you were dealt in). */
   canShow: boolean;
+  /**
+   * When the seat to act must have acted, as seconds since the epoch: the contract's deadline
+   * less the time a transaction needs to land. Null when nobody is on the clock.
+   */
+  deadline: number | null;
+  /** Your time bank left this deal, in seconds. */
+  timeBank: number;
 }
 
 export interface SeatView {
