@@ -31,4 +31,7 @@ jobs:
       - if: steps.prover.outputs.cache-hit != 'true'
         run: bun run prover:build
       - run: bun run compact:build --zk
+      # The ledger test: deploy and join applied to a ledger state in memory, the join proven
+      # on the real keys; skipped by ci.yml, which has no prover.
+      - run: bun test src/live/ledger.test.ts
       - run: bun run prove:deal

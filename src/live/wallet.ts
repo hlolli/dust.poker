@@ -15,11 +15,30 @@ export type InitialAPI = {
 
 export type Configuration = { indexerUri: string; indexerWsUri: string; substrateNodeUri: string; networkId: string };
 
+/** Resolves a circuit's proving artifacts for the wallet's prover, by the key location our transactions name (the circuit). */
+export type KeyMaterialProvider = {
+  getZKIR(circuitKeyLocation: string): Promise<Uint8Array>;
+  getProverKey(circuitKeyLocation: string): Promise<Uint8Array>;
+  getVerifierKey(circuitKeyLocation: string): Promise<Uint8Array>;
+};
+
+/** The ledger's ProvingProvider shape, as the wallet lends it. */
+export type ProvingProvider = {
+  check(serializedPreimage: Uint8Array, keyLocation: string): Promise<(bigint | undefined)[]>;
+  prove(serializedPreimage: Uint8Array, keyLocation: string, overwriteBindingInput?: bigint): Promise<Uint8Array>;
+};
+
 export type ConnectedAPI = {
   /** Bech32m, mn_addr_<network>1... (mainnet: mn_addr1...). */
   getUnshieldedAddress(): Promise<{ unshieldedAddress: string }>;
   /** The indexer and node the wallet talks to; the game uses the same ones. */
   getConfiguration(): Promise<Configuration>;
+  /** Takes a proven, unbound transaction (hex), adds the inputs it is short of and the fee, signs. */
+  balanceUnsealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
+  /** Submits a balanced, sealed transaction (hex) to the network. */
+  submitTransaction(tx: string): Promise<void>;
+  /** The wallet's own prover: the player's software, so a user-controlled prover (ADR 0005). */
+  getProvingProvider(keys: KeyMaterialProvider): Promise<ProvingProvider>;
 };
 
 declare global {

@@ -11,7 +11,7 @@ const ORDER = 655448439689077380993096756352324572970592126587231728136535916239
 const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
 type PS = Record<string, never>;
-export type State = Parameters<typeof createCircuitContext>[3];
+export type State = import("@midnight-ntwrk/compact-runtime").ChargedState;
 export type Circuit =
   | "join" | "buy_in" | "stand_up" | "leave" | "start_deal" | "post_key" | "shuffle" | "post_next_key" | "shuffle_next" | "expire_next"
   | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
@@ -32,6 +32,30 @@ export const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
 /** Ten positions for the `shares` circuit: fewer are padded by repeating the last one. */
 export const ten = (positions: number[]): bigint[] => Array.from({ length: 10 }, (_, i) => BigInt(positions[Math.min(i, positions.length - 1)]!));
 export const seatsOf = (l: ReturnType<typeof ledger>) => [0, 1, 2, 3, 4, 5].filter((i) => l.in_deal[i]);
+
+/** Prover keys, verifier keys and IR from `compact:build --zk`, and the KZG params, for a local prover. */
+export function keyMaterial(root: string, contract = "deal") {
+  const read = (p: string) => Bun.file(p).bytes();
+  return {
+    async lookupKey(keyLocation: string) {
+      const { jsonIrToBinary } = await import(`${root}/.compact/prover/zkir-wasm/midnight_zkir_wasm_fs.js`);
+      return {
+        proverKey: await read(`${root}/contracts/build/${contract}/keys/${keyLocation}.prover`),
+        verifierKey: await read(`${root}/contracts/build/${contract}/keys/${keyLocation}.verifier`),
+        ir: jsonIrToBinary(await Bun.file(`${root}/contracts/build/${contract}/zkir/${keyLocation}.zkir`).text()) as Uint8Array,
+      };
+    },
+    async getParams(k: number) {
+      const file = `${root}/.compact/prover/params/bls_midnight_2p${k}`;
+      if (!(await Bun.file(file).exists())) {
+        const res = await fetch(`https://midnight-s3-fileshare-dev-eu-west-1.s3.eu-west-1.amazonaws.com/bls_midnight_2p${k}`);
+        if (!res.ok) throw new Error(`params k=${k}: ${res.status}`);
+        await Bun.write(file, await res.arrayBuffer());
+      }
+      return read(file);
+    },
+  };
+}
 
 export function randomScalar(): bigint {
   const bytes = crypto.getRandomValues(new Uint8Array(64));
@@ -90,7 +114,7 @@ export class Table {
 
   static async seated<T extends Table>(this: new (players: Player[]) => T, n: number, players: Player[] = Array.from({ length: n }, () => player())): Promise<T> {
     const t = new this(players);
-    t.state = (await players[0]!.contract.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
+    t.state = (await players[0]!.contract.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState.data;
     // The referee seats joiners at the first empty seat, so player i lands on seat i.
     for (let i = 0; i < players.length; i++) {
       players[i]!.seat = i;

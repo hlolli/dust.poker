@@ -12,7 +12,8 @@ import bot2Url from "./assets/avatars/Business_Male_04.glb";
 import bot3Url from "./assets/avatars/Female_Party_01.glb";
 import bot4Url from "./assets/avatars/Business_Male_06.glb";
 import bot5Url from "./assets/avatars/Female_Party_02.glb";
-import { connect as connectWallet, installed as installedWallets, network as walletNetwork } from "./live/wallet.ts";
+import { ready as ledgerReady } from "./live/ledger-shim.js";
+import { connect as connectWallet, installed as installedWallets, network as walletNetwork, type Wallet } from "./live/wallet.ts";
 import { attachControls } from "./scene/controls.ts";
 import { type Lounge, startLounge } from "./scene/lounge.ts";
 import { Rail } from "./scene/rail.ts";
@@ -145,24 +146,49 @@ window.addEventListener("keydown", (e) => {
 });
 
 // The wallet door: Lace's consent dialog, then the address and network it gave us on the
-// status line. Nothing is at stake yet; the Live table is what this connection is for.
+// status line. Then the door reads JOIN TABLE when the URL names one (?table=<address>), or
+// DEPLOY TABLE; each is one transaction the wallet balances, signs and submits.
+let wallet: Wallet | null = null;
+const tableAddress = new URLSearchParams(location.search).get("table");
+const fail = (e: unknown) => walletStatus.set(`${walletNetwork()}: ${e instanceof Error ? e.message : e}`.toUpperCase().slice(0, 90));
 async function openWallet() {
-  const [wallet] = installedWallets();
-  if (!wallet) return walletStatus.set("NO MIDNIGHT WALLET IN THIS BROWSER");
-  walletStatus.set(`${wallet.name}: CONFIRM IN THE WALLET`.toUpperCase());
+  const [found] = installedWallets();
+  if (!found) return walletStatus.set("NO MIDNIGHT WALLET IN THIS BROWSER");
+  walletStatus.set(`${found.name}: CONFIRM IN THE WALLET`.toUpperCase());
   try {
-    const w = await connectWallet(wallet);
-    controls.unregister(walletDoor.mesh);
-    walletDoor.set(`${w.name} CONNECTED`.toUpperCase());
-    walletStatus.set(`${w.networkId}  ${w.address.slice(0, 20)}...${w.address.slice(-8)}`.toUpperCase());
-    Object.assign(window as unknown as Record<string, unknown>, { __wallet: w });
+    wallet = await connectWallet(found);
+    walletDoor.set(tableAddress ? "JOIN TABLE" : "DEPLOY TABLE");
+    walletStatus.set(`${wallet.name} ON ${wallet.networkId}  ${wallet.address.slice(0, 20)}...${wallet.address.slice(-8)}`.toUpperCase());
+    Object.assign(window as unknown as Record<string, unknown>, { __wallet: wallet });
   } catch (e) {
-    walletStatus.set(`${walletNetwork()}: ${e instanceof Error ? e.message : e}`.toUpperCase());
+    fail(e);
+  }
+}
+async function useWallet(w: Wallet) {
+  controls.unregister(walletDoor.mesh);
+  walletStatus.set(tableAddress ? "JOINING: CONFIRM IN THE WALLET" : "DEPLOYING: CONFIRM IN THE WALLET");
+  try {
+    await Promise.all([runtimeReady, ledgerReady]);
+    const live = await import("./live/live.ts");
+    Object.assign(window as unknown as Record<string, unknown>, { __live: live }); // inspection handle
+    if (tableAddress) {
+      const seat = await live.joinTable(w, tableAddress);
+      walletDoor.set(`SEAT ${seat + 1}`);
+      walletStatus.set("JOINED; THE LIVE TABLE ITSELF IS NOT BUILT YET");
+    } else {
+      const address = await live.deployTable(w);
+      walletDoor.set("TABLE DEPLOYED");
+      walletStatus.set(`TABLE ${address.slice(0, 12)}... IS IN THIS PAGE'S ADDRESS: SHARE IT`);
+      history.replaceState(null, "", `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), table: address })}`);
+    }
+  } catch (e) {
+    controls.register(walletDoor.mesh);
+    fail(e);
   }
 }
 
 onSelect = (hit) => {
-  if (hit === walletDoor.mesh) return void openWallet();
+  if (hit === walletDoor.mesh) return void (wallet ? useWallet(wallet) : openWallet());
   if (hit !== practiceDoor) return;
   controls.unregister(practiceDoor);
   splash.remove(practiceDoor);

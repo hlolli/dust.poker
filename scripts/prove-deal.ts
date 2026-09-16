@@ -6,22 +6,13 @@
 //
 // Needs .compact/prover (scripts/build-prover.sh) and the prover keys under contracts/build.
 import { parseArgs } from "node:util";
-import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { CALL, CIRCUITS, type Circuit, Phase, RAISE, seatsOf, Table } from "../contracts/harness.ts";
+import { CALL, CIRCUITS, type Circuit, keyMaterial, Phase, RAISE, seatsOf, Table } from "../contracts/harness.ts";
 
 const root = `${import.meta.dir}/..`;
 const { values: args } = parseArgs({
-  options: {
-    "zkir-wasm": { type: "string", default: `${root}/.compact/prover/zkir-wasm` },
-    keys: { type: "string", default: `${root}/contracts/build/deal/keys` },
-    zkir: { type: "string", default: `${root}/contracts/build/deal/zkir` },
-    params: { type: "string", default: `${root}/.compact/prover/params` },
-    // Only these circuits (comma-separated); default: every one.
-    circuits: { type: "string" },
-  },
+  // Only these circuits (comma-separated); default: every one.
+  options: { circuits: { type: "string" } },
 });
-const PARAMS_URL = "https://midnight-s3-fileshare-dev-eu-west-1.s3.eu-west-1.amazonaws.com/bls_midnight_2p";
 
 // ---- Play until every circuit has a preimage ----------------------------------------------
 
@@ -84,27 +75,8 @@ console.log(`${preimages.size} circuits ran; proving ${wanted.length}`);
 
 // ---- Prove each one -----------------------------------------------------------------------
 
-const zkir = await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`);
-const kmProvider = {
-  async lookupKey(keyLocation: string) {
-    const read = (p: string) => Bun.file(p).bytes();
-    return {
-      proverKey: await read(`${args.keys}/${keyLocation}.prover`),
-      verifierKey: await read(`${args.keys}/${keyLocation}.verifier`),
-      ir: zkir.jsonIrToBinary(await Bun.file(`${args.zkir}/${keyLocation}.zkir`).text()),
-    };
-  },
-  async getParams(k: number) {
-    await mkdir(args.params!, { recursive: true });
-    const file = `${args.params}/bls_midnight_2p${k}`;
-    if (!existsSync(file)) {
-      const res = await fetch(`${PARAMS_URL}${k}`);
-      if (!res.ok) throw new Error(`params k=${k}: ${res.status}`);
-      await Bun.write(file, await res.arrayBuffer());
-    }
-    return Bun.file(file).bytes();
-  },
-};
+const zkir = await import(`${root}/.compact/prover/zkir-wasm/midnight_zkir_wasm_fs.js`);
+const kmProvider = keyMaterial(root);
 
 let failed = 0;
 const started = performance.now();

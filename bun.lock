@@ -6,6 +6,7 @@
       "name": "dust.poker",
       "dependencies": {
         "@midnight-ntwrk/compact-runtime": "0.19.0",
+        "@midnightntwrk/ledger-v9": "1.0.0-rc.4",
         "three": "0.186.0",
       },
       "devDependencies": {
@@ -19,6 +20,8 @@
     "@dimforge/rapier3d-compat": ["@dimforge/rapier3d-compat@0.12.0", "", {}, "sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow=="],
 
     "@midnight-ntwrk/compact-runtime": ["@midnight-ntwrk/compact-runtime@0.19.0", "", { "dependencies": { "@midnightntwrk/onchain-runtime-v4": "^4.0.0-rc.3", "@noble/curves": "^2.2.0", "@noble/hashes": "^2.0.1", "@types/object-inspect": "^1.8.1", "object-inspect": "^1.12.3" } }, "sha512-0q1ZOlyPdCCEasAxlHxagO6Sb+Db5GM6qYPQ+c+cp71NRxQgiY0Wd0/LIoshQTs+OBISb4XTjiNQ1lxcKR79qQ=="],
+
+    "@midnightntwrk/ledger-v9": ["@midnightntwrk/ledger-v9@1.0.0-rc.4", "", {}, "sha512-vwn07VFlh+APpMHxBXCDc7mvoU0UukTMwpk7Kxq6wCtuV/CTNM7V8JMBWr2xFW+edvG/YMcM9TX3rwBMtYVRgg=="],
 
     "@midnightntwrk/onchain-runtime-v4": ["@midnightntwrk/onchain-runtime-v4@4.0.0-rc.3", "", {}, "sha512-LAf4g3vgwtPqActbi5RAoZcfYduqnFqtsHN+i1s/Mcb5vi2yMbPmpSOJ0YCCIGb2S/qY7G5tQARHVD0PJyHSNA=="],
 

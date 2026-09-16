@@ -69,15 +69,15 @@ const seatsOf = (l: Ledger) => [0, 1, 2, 3, 4, 5].filter((i) => l.in_deal[i]);
  * One player's private state and its view of the contract. Two deck keys: this deal's, and
  * the one the next deck is being prepared with; they rotate when a deal starts.
  */
-class Seat {
+export class Seat {
   readonly contract: Contract<PS>;
   x = randomScalar();
   nextX = randomScalar();
   /** The seat the referee gave this player; -1 until joined. */
   index = -1;
 
-  constructor(readonly name: string) {
-    const secret = randomScalar();
+  /** `secret` is the player's identity at the table (the seat owner is its curve point); a Live player keeps theirs. */
+  constructor(readonly name: string, readonly secret = randomScalar()) {
     this.contract = new Contract<PS>({
       player_secret: (ctx) => [ctx.privateState, secret],
       deck_key: (ctx) => [ctx.privateState, this.x],
