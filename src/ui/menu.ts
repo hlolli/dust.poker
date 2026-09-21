@@ -1,4 +1,6 @@
 import { setFor } from "../scene/lounge.ts";
+import type { Chain } from "../live/chain.ts";
+import type { Seat } from "../referee/contract.ts";
 import { MODELS } from "../scene/models.ts";
 import { connect, installed, type Wallet } from "../live/wallet.ts";
 import { startBackdrop } from "./backdrop.ts";
@@ -10,9 +12,12 @@ import { activate, activeProfile, createProfile, type Profile, profiles, removeP
  * lines, like a casino's show listing. Who is playing (profiles, as brass name plates), the
  * Practice table (lit), and the Live table (unlit until Lace has answered: then the network,
  * then a table to join or deploy). Styled in src/index.html (.menu). Resolves when the
- * player sits down at Practice.
+ * player sits down, at Practice or at a Live table they have joined.
  */
-export function showMenu(): Promise<{ profile: Profile; mode: "practice" }> {
+/** What the menu resolves with: the Practice table, or a Live one you have a seat at. */
+export type Entry = { profile: Profile; mode: "practice" } | { profile: Profile; mode: "live"; chain: Chain; seat: Seat };
+
+export function showMenu(): Promise<Entry> {
   return new Promise((resolve) => {
     const el = document.createElement("main");
     el.className = "menu";
@@ -122,13 +127,15 @@ export function showMenu(): Promise<{ profile: Profile; mode: "practice" }> {
     renderProfiles();
 
     // ---- Practice ---------------------------------------------------------------------------
-    go.onclick = () => {
-      const profile = activeProfile();
-      if (!profile) return;
+    const leave = (entry: Entry) => {
       backdrop.stop();
       clearInterval(bandTimer);
       el.remove();
-      resolve({ profile, mode: "practice" });
+      resolve(entry);
+    };
+    go.onclick = () => {
+      const profile = activeProfile();
+      if (profile) leave({ profile, mode: "practice" });
     };
 
     // ---- Live -------------------------------------------------------------------------------
@@ -199,8 +206,9 @@ export function showMenu(): Promise<{ profile: Profile; mode: "practice" }> {
     el.querySelector<HTMLButtonElement>(".join")!.onclick = () =>
       withLive("Taking a seat", async (mod, w, profile) => {
         if (!/^[0-9a-f]{64}$/i.test(address.value.trim())) throw new Error("A table address is 64 hex characters.");
-        const seat = await mod.joinTable(w, profile, address.value.trim());
-        return `Seat ${seat + 1} is yours. The Live room itself is not built yet.`;
+        const { chain, seat } = await mod.joinTable(w, profile, address.value.trim());
+        leave({ profile, mode: "live", chain, seat });
+        return `Seat ${seat.index + 1} is yours.`;
       });
     el.querySelector<HTMLButtonElement>(".deploy")!.onclick = () =>
       withLive("Opening a table", async (mod, w, profile) => {

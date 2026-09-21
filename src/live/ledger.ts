@@ -58,7 +58,19 @@ export function callTx(network: string, run: CircuitResults, contract: L.Contrac
     L.communicationCommitmentRandomness(),
     call.circuitId, // the key location: our provers look keys up by circuit name
   );
-  return L.Transaction.fromParts(network).addCalls({ tag: "first" }, [pre], params, ttl);
+  const tx = L.Transaction.fromParts(network).addCalls({ tag: "first" }, [pre], params, ttl);
+  // What the call pays out to players (a leaver's stack, an abort's refunds) must appear as
+  // outputs of the same segment, or the transaction is unbalanced; the wallet adds only inputs.
+  const [segment, intent] = [...tx.intents!.entries()][0]!;
+  const action = intent.actions[0] as L.ContractCall<L.PreProof>;
+  const payouts = (t: L.Transcript<L.AlignedValue> | undefined): L.UtxoOutput[] =>
+    [...(t?.effects.claimedUnshieldedSpends ?? [])].filter(([[type, to]]) => to.tag === "user" && type.tag !== "dust").map(([[type, to], value]) => ({ value, owner: to.address, type: (type as L.UnshieldedTokenType).raw }));
+  const guaranteed = payouts(action.guaranteedTranscript);
+  const fallible = payouts(action.fallibleTranscript);
+  if (guaranteed.length) intent.guaranteedUnshieldedOffer = L.UnshieldedOffer.new([], guaranteed, []);
+  if (fallible.length) intent.fallibleUnshieldedOffer = L.UnshieldedOffer.new([], fallible, []);
+  if (guaranteed.length || fallible.length) tx.intents = new Map([[segment, intent]]);
+  return tx;
 }
 
 /** Proves every call in the transaction with the given prover (ours in the browser, or the wallet's). */

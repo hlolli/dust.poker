@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
 import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
-import type { Action } from "./referee/types.ts";
+import type { Action, Referee } from "./referee/types.ts";
 import { createSeat } from "./scene/avatar.ts";
 import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseHands, poseSeated, poseStanding, poseWalking } from "./scene/avatars.ts";
 import { BAR, BARTENDER_POSE, createBar } from "./scene/bar.ts";
@@ -20,8 +20,8 @@ import { TableView } from "./scene/table-view.ts";
 import { ActionBar } from "./ui/actions.ts";
 import { HandPanel } from "./ui/hand.ts";
 import type { Profile } from "./ui/profiles.ts";
+import type { Entry } from "./ui/menu.ts";
 
-const YOU = 0;
 /** How much higher than the others you hold your cards: toward the eyes the camera sits in. */
 const LIFT = 0.05;
 const BOT_NAMES = ["Dean", "Frank", "Sammy", "Peggy", "Louis"];
@@ -32,10 +32,13 @@ const ENTRANCE = new THREE.Vector3(0, 0, 5.2);
 
 /**
  * The room: the hall, the table, the bar, the people. The player walks in from the entrance
- * and sits at seat 0 of the Practice table as their profile's character; the bots take the
- * other characters. The only module besides main.ts that touches the document.
+ * and sits down as their profile's character: at seat 0 of the Practice table, where the bots
+ * take the other characters, or at the seat a Live table gave them, where the other players are
+ * whoever the chain says is there. The only module besides the ui layer that touches the document.
  */
-export async function enterRoom(profile: Profile) {
+export async function enterRoom(entry: Entry) {
+  const { profile } = entry;
+  const YOU = entry.mode === "live" ? entry.seat.index : 0;
   const renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -82,7 +85,7 @@ export async function enterRoom(profile: Profile) {
   let entrance: { avatar: Avatar; t0: number } | null = null;
   let attachCards: ((seat: number, avatar: Avatar) => void) | null = null;
   for (let i = 0; i < SEAT_COUNT; i++) {
-    loadAvatar(i === YOU ? yours.url : others[(i - 1) % others.length]!.url)
+    loadAvatar(i === YOU ? yours.url : others[(i + (i < YOU ? 0 : -1) + others.length) % others.length]!.url)
       .then((a) => {
         const { position, yaw } = seatPose(i);
         a.root.position.copy(position);
@@ -262,11 +265,17 @@ export async function enterRoom(profile: Profile) {
 
   let view: TableView | null = null;
   async function sitDown() {
-    const names = Array.from({ length: SEAT_COUNT }, (_, i) => (i === YOU ? profile.name : BOT_NAMES[i - 1]!));
     // The referee is the compiled contract; its runtime's wasm must be up before it is imported.
     await runtimeReady;
-    const { ContractReferee } = await import("./referee/contract.ts");
-    const referee = new ContractReferee({ names, you: YOU });
+    let referee: Referee & { start(): void | Promise<void> };
+    if (entry.mode === "live") {
+      const { LiveReferee } = await import("./live/referee.ts");
+      referee = new LiveReferee(entry.chain, entry.seat);
+    } else {
+      const names = Array.from({ length: SEAT_COUNT }, (_, i) => (i === YOU ? profile.name : BOT_NAMES[(i + (i < YOU ? 0 : -1) + 5) % 5]!));
+      const { ContractReferee } = await import("./referee/contract.ts");
+      referee = new ContractReferee({ names, you: YOU });
+    }
     const tableView = (view = new TableView(YOU));
     const act = (a: Action) => referee.act(a).catch(console.warn);
     const show = () => referee.show().catch(console.warn);
@@ -298,10 +307,12 @@ export async function enterRoom(profile: Profile) {
       rail.update(s);
       actionBar.update(s);
       hand.update(s);
+      // Empty seats have no one in them: a Live table fills as players join.
+      avatars.forEach((a, i) => i !== YOU && i < SEAT_COUNT && a && (a.root.visible = s.seats[i]!.name !== null));
       (window as unknown as Record<string, unknown>).__table = s; // inspection handle, like __scene
     });
     Object.assign(window as unknown as Record<string, unknown>, { __referee: referee });
-    referee.start().catch(console.error);
+    void Promise.resolve(referee.start()).catch(console.error);
   }
 
   // Checked every frame rather than on the resize event: embedded browsers and XR

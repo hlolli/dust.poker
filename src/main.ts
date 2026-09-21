@@ -2,5 +2,4 @@
 import { enterRoom } from "./room.ts";
 import { showMenu } from "./ui/menu.ts";
 
-const { profile } = await showMenu();
-await enterRoom(profile);
+await enterRoom(await showMenu());

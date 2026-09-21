@@ -8,3 +8,7 @@ Everything a player talks to is built from this public repository by CI, never f
 
 - A conventional game server that mirrors chain state and pushes updates over WebSockets: faster, but it becomes a party players must trust, which is what the ZK chain is supposed to remove.
 - Peer-to-peer gossip for optimistic action echo: deferred; only worth adding if measured latency hurts.
+
+## Consequences so far
+
+- 2026-09-21: `src/live/referee.ts` is the client this decision describes. It reads the referee's state through the chain (the wallet's indexer), sends only its own seat's steps as transactions, and learns of every other seat's from the next snapshot. Two such clients play a deal to its end on a chain in memory (`src/live/referee.test.ts`). Latency is a poll for now; the indexer's subscription is the next step.
