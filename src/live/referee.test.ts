@@ -42,8 +42,9 @@ test("two Live referees play a deal through the chain, each for its own seat onl
   const bob = new Seat("Bob");
   expect(await joinOn(chain, alice, bytes(chain.me))).toBe(0);
   expect(await joinOn(chain, bob, bytes(chain.me))).toBe(1);
-  const a = new LiveReferee(chain, alice, { poll: 15, betweenDeals: 100 });
-  const b = new LiveReferee(chain, bob, { poll: 15, betweenDeals: 100 });
+  // The chain pushes every change; the poll is far apart, so the deal can only move on the pushes.
+  const a = new LiveReferee(chain, alice, { poll: 5000, betweenDeals: 100 });
+  const b = new LiveReferee(chain, bob, { poll: 5000, betweenDeals: 100 });
   a.start();
   b.start();
   try {

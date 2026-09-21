@@ -38,6 +38,9 @@ export class LiveReferee implements Referee {
   private stopped = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private busy = false;
+  private unwatch: (() => void) | null = null;
+  /** A snapshot the chain pushed while a tick was busy, to be taken up by the next. */
+  private pushed: Snapshot | null = null;
   private readonly poll: number;
   private readonly betweenDeals: number;
   private readonly retry: number;
@@ -47,7 +50,8 @@ export class LiveReferee implements Referee {
     private readonly seat: Seat,
     o: LiveOptions = {},
   ) {
-    this.poll = o.poll ?? 3000;
+    // A chain that pushes changes is polled only as a safety net.
+    this.poll = o.poll ?? (chain.watch ? 20_000 : 3000);
     this.betweenDeals = o.betweenDeals ?? 6000;
     this.retry = o.retry ?? 90_000;
   }
@@ -58,6 +62,10 @@ export class LiveReferee implements Referee {
 
   start() {
     this.stopped = false;
+    this.unwatch = this.chain.watch?.((snap) => {
+      this.pushed = snap;
+      void this.tick(snap);
+    }) ?? null;
     void this.tick();
   }
 
@@ -65,6 +73,8 @@ export class LiveReferee implements Referee {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    this.unwatch?.();
+    this.unwatch = null;
   }
 
   subscribe(fn: (s: TableState) => void) {
@@ -100,14 +110,19 @@ export class LiveReferee implements Referee {
     }
   }
 
-  /** Reads the chain; on a change, updates the view; then does what the seat owes. */
-  private async tick() {
+  /** Takes in the chain's state, pushed or asked for; on a change, updates the view; then does what the seat owes. */
+  private async tick(pushed?: Snapshot) {
     if (this.stopped) return;
+    if (this.timer) clearTimeout(this.timer);
     if (!this.busy) {
       this.busy = true;
       try {
-        await this.read();
-        await this.step();
+        do {
+          const snap = this.pushed ?? pushed ?? (await this.chain.snapshot());
+          this.pushed = null;
+          this.read(snap);
+          await this.step();
+        } while (this.pushed && !this.stopped); // a push landed meanwhile
       } catch (e) {
         this.message = e instanceof Error ? e.message : String(e);
         this.publish();
@@ -118,8 +133,7 @@ export class LiveReferee implements Referee {
     if (!this.stopped) this.timer = setTimeout(() => void this.tick(), this.pending ? Math.min(this.poll, 1000) : this.poll);
   }
 
-  private async read() {
-    const snap = await this.chain.snapshot();
+  private read(snap: Snapshot) {
     this.snap = snap;
     if (!snap.state) return;
     const raw = snap.state.serialize();

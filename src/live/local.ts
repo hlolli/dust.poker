@@ -19,6 +19,7 @@ export class LocalChain implements Chain {
   readonly network = "undeployed";
   /** Transactions applied so far. */
   applied = 0;
+  private readonly watchers = new Set<(snap: Snapshot) => void>();
   private constructor(
     readonly address: string,
     private state: L.LedgerState,
@@ -71,6 +72,14 @@ export class LocalChain implements Chain {
     }
     this.state = applyTo(this.state, tx.eraseProofs(), now);
     this.applied++;
+    // Pushed after the caller's submit resolves, as an indexer would tell every client.
+    const snap = await this.snapshot();
+    setTimeout(() => this.watchers.forEach((w) => w(snap)), 0);
+  }
+
+  watch(onChange: (snap: Snapshot) => void): () => void {
+    this.watchers.add(onChange);
+    return () => void this.watchers.delete(onChange);
   }
 }
 

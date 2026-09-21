@@ -5,7 +5,7 @@ import { type CircuitResults, ContractState as RuntimeContractState, createCircu
 import * as L from "@midnightntwrk/ledger-v9";
 import type { Seat } from "../referee/contract.ts";
 import { type Arg, type Circuit, UNTIMED } from "../referee/rules.ts";
-import { snapshot as indexerSnapshot } from "./indexer.ts";
+import { snapshot as indexerSnapshot, watchContract } from "./indexer.ts";
 import { bytes, callTx, hex, prove } from "./ledger.ts";
 import type { KeyMaterialProvider, Wallet } from "./wallet.ts";
 
@@ -23,6 +23,8 @@ export interface Chain {
   snapshot(): Promise<Snapshot>;
   /** Proves (with whatever prover this player has), balances, signs and submits. */
   submit(tx: L.UnprovenTransaction): Promise<void>;
+  /** Pushes a snapshot whenever the referee's state changes, when the chain can; returns the way to stop. */
+  watch?(onChange: (snap: Snapshot) => void): () => void;
 }
 
 // The contract holds no shielded coins, so the Zswap coin public key the runtime wants is moot.
@@ -78,5 +80,12 @@ export function walletChain(w: Wallet, address: string): Chain {
       return { state: snap.state ? L.ContractState.deserialize(bytes(snap.state)) : null, time: snap.block.timestamp, params: L.LedgerParameters.deserialize(bytes(snap.block.ledgerParameters)) };
     },
     submit: (tx) => submitThrough(w, tx),
+    watch: (onChange) =>
+      watchContract(
+        w.config.indexerWsUri,
+        address,
+        (c) => onChange({ state: L.ContractState.deserialize(bytes(c.state)), time: c.block.timestamp, params: L.LedgerParameters.deserialize(bytes(c.block.ledgerParameters)) }),
+        console.warn,
+      ),
   };
 }

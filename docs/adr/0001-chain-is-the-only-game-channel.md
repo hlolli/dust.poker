@@ -11,4 +11,4 @@ Everything a player talks to is built from this public repository by CI, never f
 
 ## Consequences so far
 
-- 2026-09-21: `src/live/referee.ts` is the client this decision describes. It reads the referee's state through the chain (the wallet's indexer), sends only its own seat's steps as transactions, and learns of every other seat's from the next snapshot. Two such clients play a deal to its end on a chain in memory (`src/live/referee.test.ts`). Latency is a poll for now; the indexer's subscription is the next step.
+- 2026-09-21: `src/live/referee.ts` is the client this decision describes. It reads the referee's state through the chain (the wallet's indexer), sends only its own seat's steps as transactions, and learns of every other seat's from the next snapshot. Two such clients play a deal to its end on a chain in memory (`src/live/referee.test.ts`). Changes arrive by the indexer's `contractActions` subscription, with a slow poll as the safety net.
