@@ -1,0 +1,92 @@
+# The standalone indexer's configuration for the local network, trimmed from the indexer's own
+# indexer-standalone/config.yaml at the tag local/build-indexer.sh builds. Paths are relative to
+# local/ (indexer.sh runs from there).
+thread_stack_size: "24MiB"
+
+application:
+  network_id: "undeployed"
+  blocks_buffer: 10
+  caught_up_max_distance: 10
+  caught_up_leeway: 5
+  gc_bound: "200ms"
+  gc_interval: 25
+  arena_metrics_interval: 0
+  ledger_state_retention: 1000
+  active_wallets_query_delay: "500ms"
+  active_wallets_ttl: "30m"
+  transaction_batch_size: 50
+
+spo:
+  interval: 5000
+  stake_refresh:
+    period_secs: 900
+    page_size: 100
+    max_rps: 2
+
+infra:
+  run_migrations: true
+  storage:
+    cnn_url: "data/indexer.sqlite"
+  ledger_db:
+    cache_max_nodes: 100000
+    cnn_url: "data/ledger-db.sqlite"
+  node:
+    url: "ws://127.0.0.1:9944"
+    reconnect_max_delay: "10s"
+    reconnect_max_attempts: 30
+    subscription_recovery_timeout: "30s"
+  spo_node:
+    # No SPO node here; the indexer would give up on it and exit after five minutes otherwise.
+    url: "ws://127.0.0.1:9944"
+    reconnect_max_delay: "24h"
+    reconnect_max_attempts: 30
+  api:
+    address: "0.0.0.0"
+    port: 8088
+    request_body_limit: "1MiB"
+    max_complexity: 200
+    max_depth: 15
+    subscription:
+      blocks:
+        batch_size: 20
+      contract_actions:
+        batch_size: 20
+      contract_events:
+        batch_size: 20
+      dust_generations:
+        batch_size: 20
+      dust_ledger_events:
+        batch_size: 20
+      dust_nullifier_transactions:
+        batch_size: 20
+      shielded_nullifier_transactions:
+        batch_size: 20
+      shielded_transactions:
+        batch_size: 20
+        progress_update_interval: "30s"
+        keep_wallet_alive_interval: "1m"
+      unshielded_transactions:
+        batch_size: 20
+        progress_update_interval: "30s"
+      zswap_ledger_events:
+        batch_size: 20
+      progress_cache:
+        max_capacity: 10000
+        time_to_live: "5s"
+    quota:
+      max_concurrent_per_connection: 20
+      max_session_subscriptions_per_minute: 10
+    contract_state_cache:
+      max_capacity: "512MiB"
+      time_to_idle: "10m"
+      max_concurrent_loads: 6
+
+telemetry:
+  tracing:
+    enabled: false
+    service_name: "indexer"
+    otlp_exporter_endpoint: "http://localhost:4317"
+  metrics:
+    enabled: false
+    address: "0.0.0.0"
+    port: 9000

@@ -8,6 +8,9 @@ import { startBackdrop } from "./backdrop.ts";
 import { showCreator } from "./creator.ts";
 import { activate, activeProfile, createProfile, type Profile, profiles, removeProfile, updateProfile } from "./profiles.ts";
 
+/** The networks Lace can be on; "undeployed" is the one on your machine (README), the only one running ledger 9 so far. */
+const NETWORKS = ["undeployed", "mainnet", "preprod", "preview"];
+
 /**
  * The main menu, before the room loads: the house marquee, then a letterboard with three
  * lines, like a casino's show listing. Who is playing (profiles, as brass name plates), the
@@ -48,7 +51,7 @@ export function showMenu(): Promise<Entry> {
           </div>
           <div class="row">
             <button class="connect" type="button">Connect Lace</button>
-            <div class="network" hidden>${["mainnet", "preprod", "preview"].map((n) => `<label class="ticket"><input type="radio" name="network" value="${n}" /><span>${n}</span></label>`).join("")}</div>
+            <div class="network" hidden>${NETWORKS.map((n) => `<label class="ticket"><input type="radio" name="network" value="${n}" /><span>${n}</span></label>`).join("")}</div>
           </div>
           <div class="row table" hidden>
             <input name="table" placeholder="Table address" autocomplete="off" spellcheck="false" />
@@ -167,7 +170,7 @@ export function showMenu(): Promise<Entry> {
       connectButton.disabled = true;
       // Lace connects to one network at a time and wants it named; ask for each until one answers.
       let error: unknown = null;
-      for (const id of ["mainnet", "preprod", "preview"]) {
+      for (const id of NETWORKS) {
         try {
           return connected(await connect(found, id));
         } catch (e) {

@@ -1,0 +1,39 @@
+# A Midnight network on this machine, the "undeployed" one: a node with the dev preset (four
+# genesis wallets, seeds 00..01 to 00..04, hold the Night) and a proof server, both from Docker
+# Hub. The indexer runs on the host instead (local/indexer.sh): the wallet SDK needs indexer
+# 4.4.0-rc.4 or later, and Docker Hub stops at rc.2, so local/build-indexer.sh builds rc.5 from
+# source. The ledger-9 era throughout, which the contract compiles for (compact 0.34).
+#
+#   docker compose -f local/compose.yml up -d
+#   local/build-indexer.sh                            # once; needs Rust 1.95 (rustup picks it)
+#   local/indexer.sh                                  # keep running; GraphQL on :8088
+#   bun local/fund.ts <mn_addr_undeployed1...>        # Night for a wallet, from the genesis one
+#   docker compose -f local/compose.yml down          # a fresh chain next time; also wipe local/data
+#
+# Lace: Settings > Midnight > network "Undeployed" (node http://localhost:9944, indexer
+# http://localhost:8088/api/v4/graphql, proof server http://localhost:6300), then fund the
+# address it shows under Receive.
+services:
+  node:
+    image: midnightntwrk/midnight-node:2.1.0-beta.1
+    container_name: dust-node
+    ports:
+      - "9944:9944"
+    environment:
+      CFG_PRESET: dev
+      SIDECHAIN_BLOCK_BENEFICIARY: "04bcf7ad3be7a5c790460be82a713af570f22e0f801f6659ab8e84a52be6969e"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9944/health"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+
+  proof-server:
+    image: midnightntwrk/proof-server:9.0.0-rc.7
+    container_name: dust-proof-server
+    command: ["midnight-proof-server --verbose"]
+    ports:
+      - "6300:6300"
+    environment:
+      RUST_BACKTRACE: full

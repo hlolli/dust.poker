@@ -9,3 +9,6 @@ dist/
 .claude/settings.local.json
 .compact/
 contracts/build/
+local/bin/
+local/data/
+local/.indexer-src/
