@@ -1,5 +1,6 @@
 import { setFor } from "../scene/lounge.ts";
 import type { Chain } from "../live/chain.ts";
+import type { KeyStore } from "../live/referee.ts";
 import type { Seat } from "../referee/contract.ts";
 import { MODELS } from "../scene/models.ts";
 import { connect, installed, type Wallet } from "../live/wallet.ts";
@@ -15,7 +16,7 @@ import { activate, activeProfile, createProfile, type Profile, profiles, removeP
  * player sits down, at Practice or at a Live table they have joined.
  */
 /** What the menu resolves with: the Practice table, or a Live one you have a seat at. */
-export type Entry = { profile: Profile; mode: "practice" } | { profile: Profile; mode: "live"; chain: Chain; seat: Seat };
+export type Entry = { profile: Profile; mode: "practice" } | { profile: Profile; mode: "live"; chain: Chain; seat: Seat; store: KeyStore };
 
 export function showMenu(): Promise<Entry> {
   return new Promise((resolve) => {
@@ -206,8 +207,8 @@ export function showMenu(): Promise<Entry> {
     el.querySelector<HTMLButtonElement>(".join")!.onclick = () =>
       withLive("Taking a seat", async (mod, w, profile) => {
         if (!/^[0-9a-f]{64}$/i.test(address.value.trim())) throw new Error("A table address is 64 hex characters.");
-        const { chain, seat } = await mod.joinTable(w, profile, address.value.trim());
-        leave({ profile, mode: "live", chain, seat });
+        const { chain, seat, store } = await mod.joinTable(w, profile, address.value.trim());
+        leave({ profile, mode: "live", chain, seat, store });
         return `Seat ${seat.index + 1} is yours.`;
       });
     el.querySelector<HTMLButtonElement>(".deploy")!.onclick = () =>

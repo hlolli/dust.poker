@@ -11,7 +11,15 @@ import { type Chain, callOn, type Snapshot } from "./chain.ts";
 // next deck), and takes betting decisions from the player. Every other seat is another
 // player's client doing the same; nothing here ever acts for them (ADR 0001).
 
+/** Where a seat's deck keys are kept between page loads, so a reload mid-deal loses nothing. */
+export interface KeyStore {
+  load(): { dealNo: bigint; x: bigint; nextX: bigint } | null;
+  save(keys: { dealNo: bigint; x: bigint; nextX: bigint }): void;
+}
+
 export interface LiveOptions {
+  /** The deck keys' keeping place; without one they live as long as the page. */
+  store?: KeyStore;
   /** How often to ask the chain, in ms. */
   poll?: number;
   /** How long to wait after a deal ends before the lowest seat starts the next, in ms. */
@@ -44,6 +52,7 @@ export class LiveReferee implements Referee {
   private readonly poll: number;
   private readonly betweenDeals: number;
   private readonly retry: number;
+  private readonly store: KeyStore | null;
 
   constructor(
     private readonly chain: Chain,
@@ -54,6 +63,7 @@ export class LiveReferee implements Referee {
     this.poll = o.poll ?? (chain.watch ? 20_000 : 3000);
     this.betweenDeals = o.betweenDeals ?? 6000;
     this.retry = o.retry ?? 90_000;
+    this.store = o.store ?? null;
   }
 
   get you() {
@@ -148,9 +158,20 @@ export class LiveReferee implements Referee {
     for (const i of occupied(l)) this.names[i] ??= i === this.you ? this.seat.name : `Seat ${i + 1}`;
     if (l.deal_no !== this.lastDeal) {
       // A deal started since we last looked: keys rotate (prepared if it opened at the hole
-      // cards), stacks before the blinds are stack plus what is in so far.
+      // cards), stacks before the blinds are stack plus what is in so far. On the first look
+      // after a reload, the keys come back from the store: this deal's as they were, or the
+      // next deck's carried into a deal that began while we were away.
+      const prepared = l.phase !== Phase.keys && l.phase !== Phase.shuffle;
+      const kept = this.lastDeal === -1n ? this.store?.load() : null;
+      if (kept && kept.dealNo === l.deal_no) {
+        this.seat.x = kept.x;
+        this.seat.nextX = kept.nextX;
+      } else if (l.phase >= Phase.keys && l.phase !== Phase.idle) {
+        if (kept && kept.dealNo + 1n === l.deal_no) this.seat.nextX = kept.nextX;
+        this.seat.rotate(prepared);
+      }
       this.lastDeal = l.deal_no;
-      if (l.phase >= Phase.keys && l.phase !== Phase.idle) this.seat.rotate(l.phase !== Phase.keys && l.phase !== Phase.shuffle);
+      this.store?.save({ dealNo: l.deal_no, x: this.seat.x, nextX: this.seat.nextX });
       this.stackBefore = l.stack.map((s, i) => Number(s) + Number(l.total[i]));
       this.lastAction = this.lastAction.map(() => null);
       this.winners = [];

@@ -1,3 +1,4 @@
+import { ecMulGenerator } from "@midnight-ntwrk/compact-runtime";
 import { cardName, holeCards, openCard, shownCards } from "../../contracts/client.ts";
 import type { Ledger } from "../../contracts/build/deal/contract/index.js";
 import type { Card } from "../poker/cards.ts";
@@ -34,6 +35,15 @@ export const seatsOf = (l: Ledger) => [0, 1, 2, 3, 4, 5].filter((i) => l.in_deal
 export const ten = (positions: number[]): bigint[] => Array.from({ length: 10 }, (_, i) => BigInt(positions[Math.min(i, positions.length - 1)]!));
 /** Seats with a player in them. */
 export const occupied = (l: Ledger) => [0, 1, 2, 3, 4, 5].filter((i) => l.seat_owner.member(BigInt(i)));
+
+/** The seat held by the player with this secret (the owner's point is the secret times the generator), or -1. */
+export function seatOf(l: Ledger, secret: bigint): number {
+  const me = ecMulGenerator(secret);
+  return occupied(l).find((i) => {
+    const p = l.seat_owner.lookup(BigInt(i));
+    return p.x === me.x && p.y === me.y;
+  }) ?? -1;
+}
 
 /** The contract's betting rules for a seat, for the rail and the bots. */
 export function legal(l: Ledger, seat: number): Legal {

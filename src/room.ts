@@ -270,7 +270,7 @@ export async function enterRoom(entry: Entry) {
     let referee: Referee & { start(): void | Promise<void> };
     if (entry.mode === "live") {
       const { LiveReferee } = await import("./live/referee.ts");
-      referee = new LiveReferee(entry.chain, entry.seat);
+      referee = new LiveReferee(entry.chain, entry.seat, { store: entry.store });
     } else {
       const names = Array.from({ length: SEAT_COUNT }, (_, i) => (i === YOU ? profile.name : BOT_NAMES[(i + (i < YOU ? 0 : -1) + 5) % 5]!));
       const { ContractReferee } = await import("./referee/contract.ts");
