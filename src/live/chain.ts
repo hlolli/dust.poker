@@ -31,11 +31,17 @@ export interface Chain {
 export const COIN_PUBLIC_KEY = "00".repeat(32);
 const HOUR = 3_600_000;
 
-/** Runs a circuit for a seat against a snapshot and wraps the run into a transaction. */
+/**
+ * Runs a circuit for a seat against a snapshot and wraps the run into a transaction. A timed
+ * circuit states the clock: the wall clock, a little behind so a clock slightly ahead of the
+ * chain's still passes, and never before the snapshot's block. The contract accepts a stated
+ * clock up to its slack behind the block the transaction lands in, so the fresher, the better.
+ */
 export async function callOn(chain: Chain, snap: Snapshot, seat: Seat, circuit: Circuit, args: Arg[]): Promise<{ tx: L.UnprovenTransaction; result: unknown }> {
   if (!snap.state) throw new Error(`no table at ${chain.address.slice(0, 12)}...`);
-  const ctx = createCircuitContext(circuit, chain.address, COIN_PUBLIC_KEY, RuntimeContractState.deserialize(snap.state.serialize()), {}, undefined, undefined, undefined, snap.time);
-  const all = UNTIMED.has(circuit) ? args : [...args, BigInt(snap.time)];
+  const now = UNTIMED.has(circuit) ? snap.time : Math.max(snap.time, Math.floor(Date.now() / 1000) - 5);
+  const ctx = createCircuitContext(circuit, chain.address, COIN_PUBLIC_KEY, RuntimeContractState.deserialize(snap.state.serialize()), {}, undefined, undefined, undefined, now);
+  const all = UNTIMED.has(circuit) ? args : [...args, BigInt(now)];
   const run = await (seat.contract.circuits[circuit] as (c: typeof ctx, ...a: Arg[]) => Promise<CircuitResults>)(ctx, ...all);
   return { tx: callTx(chain.network, run, snap.state, snap.params, new Date(Date.now() + HOUR)), result: run.result };
 }
@@ -49,7 +55,8 @@ const fetchBytes = async (path: string) => {
   return new Uint8Array(await res.arrayBuffer());
 };
 export const keyMaterial: KeyMaterialProvider = {
-  getZKIR: (c) => fetchBytes(`zkir/${c}.bzkir`),
+  // The IR as compactc emits it (ZKIR v3, JSON); the prover encodes it for itself.
+  getZKIR: (c) => fetchBytes(`zkir/${c}.zkir`),
   getProverKey: (c) => fetchBytes(`keys/${c}.prover`),
   getVerifierKey: (c) => fetchBytes(`keys/${c}.verifier`),
 };

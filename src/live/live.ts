@@ -7,10 +7,10 @@ import { ContractState as RuntimeContractState, createConstructorContext } from 
 import * as L from "@midnightntwrk/ledger-v9";
 import { ledger } from "../../contracts/build/deal/contract/index.js";
 import { Seat } from "../referee/contract.ts";
-import { seatOf } from "../referee/rules.ts";
+import { CIRCUITS, seatOf } from "../referee/rules.ts";
 import type { Profile } from "../ui/profiles.ts";
 import { type Chain, callOn, COIN_PUBLIC_KEY, keyMaterial, submitThrough, walletChain } from "./chain.ts";
-import { bytes, deployable, deployTx } from "./ledger.ts";
+import { bytes, deployInParts, isOurs, type VerifierKeys } from "./ledger.ts";
 import type { KeyStore } from "./referee.ts";
 import type { Wallet } from "./wallet.ts";
 
@@ -23,26 +23,52 @@ export const ASSET = () => bytes(L.nativeToken().raw);
 /** The player at a Live table: the profile's name and its secret, which is the identity the seat owner's point derives from. */
 export const you = (profile: Profile) => new Seat(profile.name, BigInt(profile.secret));
 
-/** Deploys a table; returns its address. Nothing to prove in a deploy, but the wallet balances the fee. */
+/** Polls the chain until the table's state satisfies `ok`; a few blocks at most. */
+async function settled(chain: Chain, ok: (state: L.ContractState | null) => boolean, what: string, ms = 180_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (ok((await chain.snapshot()).state)) return;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  throw new Error(`${what}: the chain did not show it in time`);
+}
+
+/**
+ * Deploys a table; returns its address. Nothing to prove in a deploy, but the wallet balances the
+ * fee. The deploy comes in parts (ledger.ts, deployInParts), each waited for before the next, and
+ * the address is handed back once the last part has locked the circuits.
+ */
 export async function deployTable(w: Wallet, profile: Profile): Promise<string> {
   const constructed = await you(profile).contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), ASSET());
-  const { address, tx } = deployTx(w.networkId, await deployable(constructed.currentContractState, keyMaterial.getVerifierKey), new Date(Date.now() + HOUR));
-  await submitThrough(w, tx);
-  return address;
+  const { params } = await walletChain(w, "00".repeat(32)).snapshot();
+  const plan = await deployInParts(w.networkId, constructed.currentContractState, keyMaterial.getVerifierKey, params, new Date(Date.now() + HOUR));
+  const chain = walletChain(w, plan.address);
+  await submitThrough(w, plan.deploy);
+  await settled(chain, (s) => s !== null, "the deploy");
+  for (const [i, update] of plan.updates.entries()) {
+    await submitThrough(w, update);
+    await settled(chain, (s) => s !== null && s.maintenanceAuthority.counter > BigInt(i), `update ${i + 1} of ${plan.updates.length}`);
+  }
+  return plan.address;
 }
 
 /** Joins the table on `chain` with `buy` chips; the chain's balancing adds buy plus bond of the
  *  table's asset. A player already seated there (a reload, another tab) takes their seat back
- *  without a transaction. Returns the seat. */
-export async function joinOn(chain: Chain, seat: Seat, payout: Uint8Array, buy = 200n): Promise<number> {
+ *  without a transaction. With `keys`, refuses a table whose circuits are not the ones we built,
+ *  or whose circuits someone could still change. Returns the seat. */
+export async function joinOn(chain: Chain, seat: Seat, payout: Uint8Array, buy = 200n, keys?: VerifierKeys): Promise<number> {
   const snap = await chain.snapshot();
   if (snap.state) {
+    if (keys && !(await isOurs(snap.state, keys, CIRCUITS))) throw new Error("Not a dust.poker table: its circuits are not the ones this site plays, or they can still be changed.");
     const held = seatOf(ledger(RuntimeContractState.deserialize(snap.state.serialize()).data), seat.secret);
     if (held >= 0) return (seat.index = held);
   }
   const { tx, result } = await callOn(chain, snap, seat, "join", [payout, buy]);
   await chain.submit(tx);
   seat.index = Number(result);
+  // Until the chain shows the seat as ours, nothing is joined: another player's join in the
+  // same block would have taken the seat this one was computed for.
+  await settled(chain, (s) => s !== null && seatOf(ledger(RuntimeContractState.deserialize(s.serialize()).data), seat.secret) === seat.index, "the join");
   return seat.index;
 }
 
@@ -50,7 +76,7 @@ export async function joinOn(chain: Chain, seat: Seat, payout: Uint8Array, buy =
 export async function joinTable(w: Wallet, profile: Profile, address: string, buy = 200n): Promise<{ chain: Chain; seat: Seat; store: KeyStore }> {
   const chain = walletChain(w, address);
   const seat = you(profile);
-  await joinOn(chain, seat, w.payout, buy);
+  await joinOn(chain, seat, w.payout, buy, keyMaterial.getVerifierKey);
   return { chain, seat, store: browserKeyStore(`dust.poker/keys/${profile.id}/${address}`) };
 }
 

@@ -1,7 +1,7 @@
 import { ContractState as RuntimeContractState } from "@midnight-ntwrk/compact-runtime";
 import { ledger, type Ledger } from "../../contracts/build/deal/contract/index.js";
 import type { Seat } from "../referee/contract.ts";
-import { actionStep, canShow, CLOCK_SLACK, emptyTable, legal, occupied, outcome, owed, Phase, type Step, tableFrom } from "../referee/rules.ts";
+import { actionStep, canShow, emptyTable, legal, occupied, outcome, owed, Phase, type Step, tableFrom } from "../referee/rules.ts";
 import type { Action, Referee, TableState } from "../referee/types.ts";
 import { type Chain, callOn, type Snapshot } from "./chain.ts";
 
@@ -134,7 +134,7 @@ export class LiveReferee implements Referee {
           await this.step();
         } while (this.pushed && !this.stopped); // a push landed meanwhile
       } catch (e) {
-        this.message = e instanceof Error ? e.message : String(e);
+        this.message = reason(e);
         this.publish();
       } finally {
         this.busy = false;
@@ -226,4 +226,12 @@ export class LiveReferee implements Referee {
 }
 
 /** Seconds a client should keep for a transaction to land, relative to the contract's deadline. */
-export const LANDING = CLOCK_SLACK;
+/** An error's message with its causes: a wallet wraps the node's answer two or three layers deep. */
+export function reason(e: unknown): string {
+  const parts: string[] = [];
+  for (let at = e, depth = 0; at && depth < 6; at = (at as { cause?: unknown }).cause, depth++) {
+    const m = at instanceof Error ? at.message : String(at);
+    if (!parts.includes(m)) parts.push(m);
+  }
+  return parts.join(": ") || String(e);
+}

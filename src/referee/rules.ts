@@ -13,6 +13,11 @@ import type { Legal, SeatView, Street, TableState } from "./types.ts";
 export type Circuit =
   | "join" | "buy_in" | "stand_up" | "leave" | "start_deal" | "post_key" | "shuffle" | "post_next_key" | "shuffle_next" | "expire_next"
   | "shares" | "release" | "act" | "act_out" | "show" | "show_hand" | "settle" | "expire" | "settle_abort";
+/** Every circuit the contract puts on chain: all exported ones but the pure card_point. */
+export const CIRCUITS: Circuit[] = [
+  "join", "buy_in", "stand_up", "leave", "start_deal", "post_key", "shuffle", "post_next_key", "shuffle_next", "expire_next",
+  "shares", "release", "act", "act_out", "show", "show_hand", "settle", "expire", "settle_abort",
+];
 export type Arg = bigint | bigint[] | Uint8Array | boolean;
 export type Step = { circuit: Circuit; args: Arg[] };
 /** Circuits that do not take the caller's clock. */
@@ -24,8 +29,9 @@ export const MAX_BUY_IN = 200;
 export const BIG_BLIND = 2;
 // The contract sets every deadline this much after the stated clock, so that a stale clock
 // cannot shorten anyone's time; a client must have acted this much before the contract's
-// deadline, which on a live table is the time a transaction needs to land.
-export const CLOCK_SLACK = 20;
+// deadline, which on a live table is the time a step needs to prove, balance and land.
+// The shuffles get four minutes (the contract's SHUFFLE_SLACK); only betting shows a clock.
+export const CLOCK_SLACK = 60;
 export const NONE = 255n;
 const STREETS: Street[] = ["preflop", "flop", "turn", "river"];
 const BOARD_LEN = [0, 3, 4, 5];

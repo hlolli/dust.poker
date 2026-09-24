@@ -4,7 +4,8 @@ import { ContractState as RuntimeContractState, createCircuitContext, createCons
 import * as L from "@midnightntwrk/ledger-v9";
 import { ledger } from "../../contracts/build/deal/contract/index.js";
 import { keyMaterial, player } from "../../contracts/harness.ts";
-import { bytes, callTx, deployable, deployTx, hex, prove } from "./ledger.ts";
+import { CIRCUITS } from "../referee/rules.ts";
+import { bytes, callTx, deployInParts, isOurs, hex, prove } from "./ledger.ts";
 
 // The first transactions, applied to a ledger state in memory as a node would: the referee is
 // deployed, then a player joins with a real unshielded input, the join proven with the wasm
@@ -59,11 +60,23 @@ describe("the referee on the ledger", () => {
     const asset = bytes(L.nativeToken().raw);
     const p = player();
     const constructed = await p.contract.initialState(createConstructorContext({}, coinPublicKey), asset);
-    const { address, tx: deploy } = deployTx(NETWORK, await deployable(constructed.currentContractState, verifierKey), ttl);
-    state = apply(state, (await prove(deploy, prover)).bind());
+    // The deploy in parts: nineteen keys are more than one transaction may write, so the deploy
+    // carries some, maintenance updates the rest, and the last update locks the circuits.
+    const circuits: string[] = CIRCUITS;
+    const plan = await deployInParts(NETWORK, constructed.currentContractState, verifierKey, state.parameters, ttl);
+    const { address } = plan;
+    expect(plan.updates.length).toBeGreaterThan(0);
+    const fullness = (tx: L.UnprovenTransaction) => state.parameters.normalizeFullness(tx.cost(state.parameters)).bytesWritten;
+    for (const tx of [plan.deploy, ...plan.updates]) expect(fullness(tx)).toBeLessThanOrEqual(0.6);
+    state = apply(state, (await prove(plan.deploy, prover)).bind());
+    expect(await isOurs(state.index(address)!, verifierKey, circuits)).toBe(false); // keys missing, and still changeable
+    for (const update of plan.updates) state = apply(state, (await prove(update, prover)).bind());
     const deployed = state.index(address)!;
-    expect(deployed.operations().map(String)).toContain("join");
+    expect(deployed.operations().map(String).sort()).toEqual([...circuits].sort());
     expect(deployed.operation("join")!.verifierKey.length).toBeGreaterThan(0);
+    expect(deployed.maintenanceAuthority.committee).toHaveLength(0);
+    expect(await isOurs(deployed, verifierKey, circuits)).toBe(true);
+    expect(await isOurs(deployed, async () => new Uint8Array(32), circuits)).toBe(false);
 
     // Join: run the circuit against the deployed state, then wrap the run into a transaction.
     const runtimeState = RuntimeContractState.deserialize(deployed.serialize());

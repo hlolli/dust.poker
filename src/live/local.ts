@@ -2,7 +2,7 @@ import { createConstructorContext } from "@midnight-ntwrk/compact-runtime";
 import * as L from "@midnightntwrk/ledger-v9";
 import { Seat } from "../referee/contract.ts";
 import { type Chain, COIN_PUBLIC_KEY, type Snapshot } from "./chain.ts";
-import { bytes, deployable, deployTx } from "./ledger.ts";
+import { bytes, deployInParts } from "./ledger.ts";
 
 // A chain in memory, for tests: a ledger state that applies transactions the way a node would,
 // minus the proofs (the circuits are proven in the proof gate; here they are only run), with
@@ -44,8 +44,8 @@ export class LocalChain implements Chain {
     const claim = L.ClaimRewardsTransaction.new("undeployed", night, vk, L.sampleIntentHash(), "Reward");
     state = applyTo(state, L.Transaction.fromRewards(claim.addSignature(L.signData(key, claim.dataToSign))), now);
     const constructed = await new Seat("deployer").contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), bytes(L.nativeToken().raw));
-    const { address, tx } = deployTx("undeployed", await deployable(constructed.currentContractState, verifierKey), new Date(now.getTime() + 3_600_000));
-    state = applyTo(state, tx.eraseProofs(), now);
+    const { address, deploy, updates } = await deployInParts("undeployed", constructed.currentContractState, verifierKey, state.parameters, new Date(now.getTime() + 3_600_000));
+    for (const tx of [deploy, ...updates]) state = applyTo(state, tx.eraseProofs(), now);
     return new LocalChain(address, state, key);
   }
 

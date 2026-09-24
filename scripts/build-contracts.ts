@@ -5,7 +5,7 @@
 // from the same source as the wasm prover (scripts/build-prover.sh), not by the zkir-v3
 // binary bundled with compactc: same version string, different key file format.
 import { $ } from "bun";
-import { existsSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import pkg from "../package.json";
 
 const root = `${import.meta.dir}/..`;
@@ -42,5 +42,16 @@ for (const f of sources) {
   if (zk) {
     console.log(`zkir compile-many -> contracts/build/${name}/keys`);
     await $`${prover}/bin/zkir compile-many ${out}/zkir ${out}/keys`.env({ ...process.env, MIDNIGHT_PP: `${prover}/params` });
+    writeFileSync(`${out}/keys/.zkir-hash`, zkirHash(out));
+  } else if (existsSync(`${out}/keys`) && (!existsSync(`${out}/keys/.zkir-hash`) || readFileSync(`${out}/keys/.zkir-hash`, "utf8").trim() !== zkirHash(out))) {
+    // Stale keys prove nothing: the prover reports an unsatisfied constraint system, hours later, on a chain.
+    console.warn(`WARNING: contracts/build/${name}/keys were made from other circuits than these; run compact:build --zk`);
   }
+}
+
+/** One hash over every circuit's IR: what the keys were made from. */
+function zkirHash(out: string): string {
+  const h = new Bun.CryptoHasher("sha256");
+  for (const f of readdirSync(`${out}/zkir`).sort()) h.update(readFileSync(`${out}/zkir/${f}`));
+  return h.digest("hex");
 }

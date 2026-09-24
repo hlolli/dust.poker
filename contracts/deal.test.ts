@@ -236,7 +236,7 @@ test("a player who does not table their hand in time aborts the deal on themselv
   expect(t.ledger.phase).toBe(Phase.tabling);
   await t.call(1, "show", 1n);
   await t.call(2, "show", 2n);
-  t.now += 80; // 60 s tabling budget, 20 s clock slack
+  t.now += 120; // 60 s tabling budget, 60 s clock slack
   await t.call(1, "expire");
   expect(t.ledger.phase).toBe(Phase.aborted);
   expect(t.ledger.offender).toBe(0n);
@@ -339,7 +339,7 @@ test("a player who does not show in time aborts the deal on themselves", async (
   await t.tableAll();
   expect(t.ledger.phase).toBe(Phase.showdown);
   await t.call(1, "show_hand", 1n);
-  t.now += 110;
+  t.now += 150; // the 90 s showdown budget after the slack
   await t.call(1, "expire");
   expect(t.ledger.phase).toBe(Phase.aborted);
   expect(t.ledger.offender).toBe(0n);
@@ -439,7 +439,7 @@ test("pipelining: a player who misses a preparation step is evicted between deal
   await t.call(0, "post_next_key", 0n);
   await t.call(2, "post_next_key", 2n);
   await t.refuses(0, "expire_next", /deadline not reached/);
-  t.now += 200;
+  t.now += 240; // the 180 s preparation budget after the slack
   await t.call(2, "expire_next");
   expect(t.ledger.seat_owner.member(1n)).toBe(false);
   expect(t.paidTo(addr(1))).toBe(199n); // its stack after the small blind of deal 1
@@ -552,14 +552,14 @@ test("the caller's clock must agree with the chain", async () => {
     return t.players[0]!.contract.circuits.start_deal(ctx, BigInt(claimed));
   };
   await expect(at(chain + 1)).rejects.toThrow(/clock ahead/);
-  await expect(at(chain - 20)).rejects.toThrow(/clock behind/);
-  await at(chain - 19); // inside the slack
+  await expect(at(chain - 60)).rejects.toThrow(/clock behind/);
+  await at(chain - 59); // inside the slack
 });
 
 test("a missed deadline aborts the deal and names the seat that owed the step", async () => {
   const t = await TestTable.seated(3);
   await t.call(0, "start_deal");
-  t.now += 79; // the 60 s keys budget after the 20 s slack
+  t.now += 119; // the 60 s keys budget after the 60 s slack
   await t.refuses(0, "expire", /deadline not reached/);
 
   // Keys phase: seat 1 never posts.
@@ -589,8 +589,8 @@ test("a missed deadline aborts the deal and names the seat that owed the step", 
   for (let i = 0; i < 3; i++) await t.call(i, "post_key", BigInt(i));
   await t.call(0, "shuffle", 0n);
   expect(t.ledger.turn).toBe(1n);
-  expect(t.ledger.deadline).toBe(BigInt(t.now + 260));
-  t.now += 260;
+  expect(t.ledger.deadline).toBe(BigInt(t.now + 480)); // the shuffle's four minutes of slack, then its budget
+  t.now += 480;
   await t.call(2, "expire");
   expect(t.ledger.offender).toBe(1n);
   await t.call(2, "settle_abort");
@@ -605,9 +605,9 @@ test("a missed deadline aborts the deal and names the seat that owed the step", 
 test("the betting clock: a player who does not act in time aborts the deal on themselves", async () => {
   const t = await TestTable.seated(3);
   await t.dealt();
-  expect(t.ledger.deadline).toBe(BigInt(t.now + 80)); // slack, thirty seconds, and the time bank
+  expect(t.ledger.deadline).toBe(BigInt(t.now + 120)); // slack, thirty seconds, and the time bank
   await t.call(0, "act", 0n, CALL, 0n);
-  t.now += 80;
+  t.now += 120;
   await t.call(2, "expire");
   expect(t.ledger.phase).toBe(Phase.aborted);
   expect(t.ledger.offender).toBe(1n);
@@ -620,7 +620,7 @@ test("the betting clock: a player who does not act in time aborts the deal on th
   await u.call(2, "act", 2n, CHECK, 0n);
   await u.call(0, "release", 0n);
   await u.call(2, "release", 2n);
-  u.now += 110;
+  u.now += 150; // the 90 s release budget after the slack
   await u.call(0, "expire");
   expect(u.ledger.offender).toBe(1n);
 }, 60_000);
@@ -714,12 +714,12 @@ test("the time bank: seconds past the thirty come out of it, once; it refills ea
   await t.dealt();
   const start = t.now;
   expect(t.ledger.bank.slice(0, 3)).toEqual([30n, 30n, 30n]);
-  expect(t.ledger.act_by).toBe(BigInt(start + 50)); // 20 s slack and the thirty
-  expect(t.ledger.deadline).toBe(BigInt(start + 80)); // plus the bank
-  t.now = start + 60; // ten seconds into the bank
+  expect(t.ledger.act_by).toBe(BigInt(start + 90)); // 60 s slack and the thirty
+  expect(t.ledger.deadline).toBe(BigInt(start + 120)); // plus the bank
+  t.now = start + 100; // ten seconds into the bank
   await t.call(0, "act", 0n, CALL, 0n);
   expect(t.ledger.bank[0]).toBe(20n);
-  expect(t.ledger.deadline).toBe(BigInt(t.now + 80)); // the next seat has its whole bank
+  expect(t.ledger.deadline).toBe(BigInt(t.now + 120)); // the next seat has its whole bank
   t.now += 40; // within the thirty: nothing drawn
   await t.call(1, "act", 1n, CALL, 0n);
   expect(t.ledger.bank[1]).toBe(30n);
@@ -728,7 +728,7 @@ test("the time bank: seconds past the thirty come out of it, once; it refills ea
   await t.call(2, "act", 2n, CHECK, 0n);
   expect(t.ledger.bank[2]).toBe(0n);
   await t.checkAndRelease(); // the flop
-  expect(t.ledger.deadline).toBe(BigInt(t.now + 50 + Number(t.ledger.bank[Number(t.ledger.to_act)]))); // whoever acts first on the flop
+  expect(t.ledger.deadline).toBe(BigInt(t.now + 90 + Number(t.ledger.bank[Number(t.ledger.to_act)]))); // whoever acts first on the flop
   await t.foldOut();
   await t.call(0, "start_deal");
   expect(t.ledger.bank.slice(0, 3)).toEqual([30n, 30n, 30n]);

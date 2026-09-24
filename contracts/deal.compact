@@ -76,11 +76,15 @@ circuit PREP_SHUFFLE_SECONDS(): Uint<64> { return 480; }
 // The betting clock: 30 s per action, plus a 30 s time bank per deal that late actions draw on.
 circuit ACT_SECONDS(): Uint<64> { return 30; }
 circuit TIME_BANK_SECONDS(): Uint<64> { return 30; }
-// A caller's stated `now` must sit within this of the block time. Every deadline is set
-// from now + CLOCK_SLACK, so a stated now behind the block never shortens another
+// A caller's stated `now` must sit within this of the block time: never ahead of it, and at
+// most the slack behind it. The stated clock is fixed before proving, and the transaction
+// lands after proving, balancing and a block, so the slack must cover all three. Every
+// deadline is set from now + slack, so a stated now behind the block never shortens another
 // player's time by more than nothing: the deadline is always at least the budget after the
-// block. Small, so that an understated now buys little time-bank relief either.
-circuit CLOCK_SLACK(): Uint<64> { return 20; }
+// block. Small, so that an understated now buys little time-bank relief either: a minute
+// for the quick circuits, and four for the shuffles, whose proofs alone take minutes.
+circuit CLOCK_SLACK(): Uint<64> { return 60; }
+circuit SHUFFLE_SLACK(): Uint<64> { return 240; }
 circuit NONE(): Uint<8> { return 255; }
 circuit BIG_BLIND(): Uint<64> { return 2; }
 // Buy-in range, 40 to 100 big blinds: a seat sits down with a stack in it and may buy in
@@ -228,14 +232,20 @@ circuit owner_check(s: Uint<8>): [] {
   assert(seat_owner.lookup(s) == me(), "not your seat");
 }
 
-circuit check_now(now: Uint<64>): [] {
+circuit check_clock(now: Uint<64>, slack: Uint<64>): [] {
   assert(blockTimeGte(now), "clock ahead of the chain");
-  assert(blockTimeLt((now + CLOCK_SLACK()) as Uint<64>), "clock behind the chain");
+  assert(blockTimeLt((now + slack) as Uint<64>), "clock behind the chain");
+}
+circuit check_now(now: Uint<64>): [] {
+  check_clock(now, CLOCK_SLACK());
 }
 
 // A deadline `budget` seconds after the block, whatever `now` the caller stated within the slack.
+circuit due_by(now: Uint<64>, slack: Uint<64>, budget: Uint<64>): Uint<64> {
+  return (now + slack + budget) as Uint<64>;
+}
 circuit due(now: Uint<64>, budget: Uint<64>): Uint<64> {
-  return (now + CLOCK_SLACK() + budget) as Uint<64>;
+  return due_by(now, CLOCK_SLACK(), budget);
 }
 
 // Hands the action to seat s: 30 seconds, and their time bank on top.
@@ -621,16 +631,16 @@ export circuit shuffle(seat: Uint<8>, claimed_now: Uint<64>): [] {
   owner_check(s);
   assert(s == turn, "not your turn to shuffle");
   const now = disclose(claimed_now);
-  check_now(now);
+  check_clock(now, SHUFFLE_SLACK());
   deck = disclose(reshuffle(deck, joint_key, permuted(), blinding()));
   shuffles_done.increment(1);
   const nxt = next_seat_in_deal(s);
   if (nxt == NONE()) {
     phase = Phase.holes;
-    deadline = due(now, HOLES_SECONDS());
+    deadline = due_by(now, SHUFFLE_SLACK(), HOLES_SECONDS());
   } else {
     turn = nxt;
-    deadline = due(now, SHUFFLE_SECONDS());
+    deadline = due_by(now, SHUFFLE_SLACK(), SHUFFLE_SECONDS());
   }
 }
 
@@ -642,7 +652,7 @@ export circuit shuffle_next(seat: Uint<8>, claimed_now: Uint<64>): [] {
   owner_check(s);
   assert(s == next_turn, "not your turn to shuffle");
   const now = disclose(claimed_now);
-  check_now(now);
+  check_clock(now, SHUFFLE_SLACK());
   next_deck = disclose(reshuffle(next_deck, next_joint_key, next_permuted(), blinding()));
   const nxt = next_in(next_in_deal, s);
   if (nxt == NONE()) {
@@ -651,7 +661,7 @@ export circuit shuffle_next(seat: Uint<8>, claimed_now: Uint<64>): [] {
     next_deadline = 0;
   } else {
     next_turn = nxt;
-    next_deadline = due(now, PREP_SHUFFLE_SECONDS());
+    next_deadline = due_by(now, SHUFFLE_SLACK(), PREP_SHUFFLE_SECONDS());
   }
 }
 
