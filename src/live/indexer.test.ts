@@ -29,7 +29,7 @@ test("the contract watcher speaks graphql-transport-ws and reconnects", async ()
           expect(msg.payload?.query).toContain("contractActions(address: $address)");
           expect(msg.payload?.variables?.address).toBe("ab".repeat(32));
           if (connections === 1) {
-            for (const n of [1, 2]) ws.send(JSON.stringify({ id: msg.id, type: "next", payload: { data: { contractActions: { state: `0${n}`, transaction: { block: { timestamp: 1_700_000_000 + n, ledgerParameters: "00" } } } } } }));
+            for (const n of [1, 2]) ws.send(JSON.stringify({ id: msg.id, type: "next", payload: { data: { contractActions: { state: `0${n}`, transaction: { block: { timestamp: (1_700_000_000 + n) * 1000, ledgerParameters: "00" } } } } } }));
             ws.send(JSON.stringify({ id: msg.id, type: "complete" }));
           }
         }

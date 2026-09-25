@@ -32,3 +32,5 @@ bun local/fund.ts <the mn_addr_undeployed... address Lace shows under Receive>
 ```
 
 The menu's Live side then connects to Lace on Undeployed, opens a table or takes a seat at one by its address. `local/compose.yml` explains the rest, including how to start the chain over.
+
+Without Lace: `bun local/bridge.ts` serves a genesis wallet on this machine, and the page opened as `http://localhost:3000/?wallet=http://127.0.0.1:8790` connects to it in place of Lace. `bun local/table.ts` plays a whole deal between two such wallets from the command line.

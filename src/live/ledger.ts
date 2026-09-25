@@ -92,7 +92,8 @@ export async function isOurs(state: L.ContractState, keys: VerifierKeys, circuit
   if (state.maintenanceAuthority.committee.length !== 0) return false;
   for (const name of circuits) {
     const op = state.operation(name);
-    if (!op || Buffer.from(op.verifierKey).compare(Buffer.from(await keys(name))) !== 0) return false;
+    const ours = await keys(name);
+    if (!op || op.verifierKey.length !== ours.length || op.verifierKey.some((b, i) => b !== ours[i])) return false;
   }
   return true;
 }

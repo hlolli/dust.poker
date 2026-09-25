@@ -3,6 +3,7 @@
 // partitioned against, and the referee's current state.
 
 export type Snapshot = {
+  /** The block; its timestamp in seconds since the epoch (the indexer answers in milliseconds). */
   block: { hash: string; height: number; timestamp: number; ledgerParameters: string };
   /** The contract's serialized state, hex; null when nothing is deployed at the address. */
   state: string | null;
@@ -13,8 +14,11 @@ const QUERY = `query ($address: HexEncoded!) {
   contractAction(address: $address) { state }
 }`;
 
-/** A contract action as the subscription delivers it: the state after it, and the block it landed in. */
+/** A contract action as the subscription delivers it: the state after it, and the block it landed in (timestamp in seconds). */
 export type Change = { state: string; block: { timestamp: number; ledgerParameters: string } };
+
+/** The indexer's block timestamps are milliseconds; the contract's clock, and everything here, is seconds. */
+const seconds = <B extends { timestamp: number }>(block: B): B => ({ ...block, timestamp: Math.floor(block.timestamp / 1000) });
 
 const SUBSCRIPTION = `subscription ($address: HexEncoded!) {
   contractActions(address: $address) { state transaction { block { timestamp ledgerParameters } } }
@@ -54,7 +58,7 @@ export function watchContract(wsUri: string, address: string, onChange: (c: Chan
           break;
         case "next": {
           const data = (msg.payload as { data?: { contractActions?: { state?: string; transaction?: { block?: Change["block"] } } } } | undefined)?.data?.contractActions;
-          if (data && typeof data.state === "string" && data.transaction?.block) onChange({ state: data.state, block: data.transaction.block });
+          if (data && typeof data.state === "string" && data.transaction?.block) onChange({ state: data.state, block: seconds(data.transaction.block) });
           break;
         }
         case "error":
@@ -86,5 +90,5 @@ export async function snapshot(indexerUri: string, address: string): Promise<Sna
   if (!res.ok) throw new Error(`indexer ${res.status} ${res.statusText}`);
   const { data, errors } = (await res.json()) as { data?: { block: Snapshot["block"]; contractAction: { state: string } | null }; errors?: { message: string }[] };
   if (errors?.length || !data) throw new Error(`indexer: ${errors?.map((e) => e.message).join("; ") ?? "no data"}`);
-  return { block: data.block, state: data.contractAction?.state ?? null };
+  return { block: seconds(data.block), state: data.contractAction?.state ?? null };
 }

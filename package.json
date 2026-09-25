@@ -6,7 +6,7 @@
     "compactc": "0.34.0"
   },
   "scripts": {
-    "dev": "bun src/index.html",
+    "dev": "bun scripts/dev.ts",
     "build": "bun scripts/build-site.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

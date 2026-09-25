@@ -2,7 +2,7 @@
 
 ## Development
 
-Bun for everything: `bun install`, `bun dev` (dev server, hot reload), `bun test`, `bun run typecheck`, `bun run build`. Run `bun run check` before committing. Tests sit next to the code as `*.test.ts` and use `bun:test`. No npm, pnpm, yarn, vitest or vite.
+Bun for everything: `bun install`, `bun dev` (`scripts/dev.ts`: the page with hot reload, and the proving keys under `/deal`), `bun test`, `bun run typecheck`, `bun run build`. Run `bun run check` before committing. Tests sit next to the code as `*.test.ts` and use `bun:test`. No npm, pnpm, yarn, vitest or vite.
 
 Layout:
 
@@ -17,7 +17,7 @@ Layout:
 - `scripts/convert-avatar.py` (Blender, headless) converts one Rocketbox FBX folder to a GLB with 1K WebP textures and the 52 ARKit shape keys; `scripts/convert-avatars.sh` runs it over a folder of them. Raw Rocketbox downloads stay out of the repo.
 - `contracts/*.compact` -- the Midnight contracts (the referee); `contracts/build/` is compiler output, not committed. `contracts/client.ts` is what a player's client computes from the ledger (reading cards, the five to show, the pot split); the tests and the benchmark take their witnesses from it
 - `scripts/` -- `fetch-compact.ts` downloads the compiler version pinned in package.json `config.compactc` into `.compact/`; `build-contracts.ts` compiles every contract (`--zk` also builds proving keys)
-- `local/` -- the Midnight network on this machine (README, "A Midnight network on your machine"): `compose.yml` the node and proof server, `build-indexer.sh` and `indexer.sh` the indexer built from source (`indexer.yaml` its config), `fund.ts` Night from the genesis wallet through the wallet SDK, `table.ts` the end-to-end run without Lace (two wallets from seeds open a table and play a deal through `src/live`). Its own `package.json`: the wallet SDK is a tool here, not a site dependency. `bin/`, `data/` and `.indexer-src/` are build output and state, not committed
+- `local/` -- the Midnight network on this machine (README, "A Midnight network on your machine"): `compose.yml` the node and proof server, `build-indexer.sh` and `indexer.sh` the indexer built from source (`indexer.yaml` its config), `fund.ts` Night from the genesis wallet through the wallet SDK, `wallet.ts` a seed wallet in the DApp connector's shape, `table.ts` the end-to-end run without Lace (two such wallets open a table and play a deal through `src/live`), `bridge.ts` one of them over HTTP for the browser (`src/live/bridge-wallet.ts` puts it under `window.midnight` when the page has `?wallet=<url>`). Its own `package.json`: the wallet SDK is a tool here, not a site dependency. `bin/`, `data/` and `.indexer-src/` are build output and state, not committed
 - `docs/adr/` decisions, `CONTEXT.md` glossary, `docs/agents/` skill config
 
 Contracts: `bun run compact:build` before `bun test`; `bun run check` does it. Contract tests live next to the source (`contracts/*.test.ts`) and run the compiled circuits locally through `@midnight-ntwrk/compact-runtime`, no chain, no proof server.

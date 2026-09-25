@@ -42,6 +42,8 @@ export class LiveReferee implements Referee {
   private doneSince = 0;
   /** A step sent and not yet seen on the chain, and when it was sent. */
   private pending: { step: Step; at: number } | null = null;
+  /** The last step sent, by what it was for, and when: the same step is not sent again within `retry`. */
+  private lastSent: { key: string; at: number } | null = null;
   private listeners = new Set<(s: TableState) => void>();
   private stopped = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -109,11 +111,13 @@ export class LiveReferee implements Referee {
   /** One transaction: the circuit run against the last snapshot, proven and submitted through the chain. */
   private async send(step: Step) {
     if (!this.snap) throw new Error("the chain has not answered yet");
+    const key = this.situation(step);
     this.pending = { step, at: Date.now() };
     this.publish();
     try {
       const { tx } = await callOn(this.chain, this.snap, this.seat, step.circuit, step.args);
       await this.chain.submit(tx);
+      this.lastSent = { key, at: Date.now() }; // accepted by the chain; a refusal is retried at once
     } catch (e) {
       this.pending = null;
       throw e;
@@ -202,13 +206,29 @@ export class LiveReferee implements Referee {
       this.pending = null;
     }
     const [step] = owed(l, this.you);
-    if (step) return void (await this.send(step));
+    if (step) return void (await this.sendOnce(step));
     // Between deals: the lowest seat with chips starts the next one, after a pause.
     const starter = occupied(l).find((i) => l.stack[i]! > 0n);
     const over = l.phase === Phase.idle || l.phase === Phase.done;
     if (over && starter === this.you && occupied(l).filter((i) => l.stack[i]! > 0n).length >= 2) {
-      if (l.phase === Phase.idle || Date.now() - this.doneSince >= this.betweenDeals) await this.send({ circuit: "start_deal", args: [] });
+      if (l.phase === Phase.idle || Date.now() - this.doneSince >= this.betweenDeals) await this.sendOnce({ circuit: "start_deal", args: [] });
     }
+  }
+
+  /**
+   * Sends a step the seat owes, unless the same step for the same situation went out within
+   * `retry`: a step that lands but fails on the chain (its section reverted, its fee paid)
+   * leaves the situation as it was, and every push would otherwise send it again at once.
+   */
+  private async sendOnce(step: Step) {
+    if (this.lastSent && this.lastSent.key === this.situation(step) && Date.now() - this.lastSent.at < this.retry) return;
+    await this.send(step);
+  }
+
+  /** What a step is for: the circuit and its arguments in this deal, phase and turn. */
+  private situation(step: Step): string {
+    const l = this.l!;
+    return `${step.circuit}:${step.args.map(String).join(",")}:${l.deal_no}:${l.phase}:${l.turn}:${l.to_act}:${l.shuffles_done}`;
   }
 
   private publish() {
