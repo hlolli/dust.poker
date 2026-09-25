@@ -10,12 +10,14 @@ import { type KeyStore, LiveReferee } from "./referee.ts";
 
 // Two players, each with their own Live referee, play a deal against a chain in memory: every
 // step is a transaction, each client performs only its own seat's, and the deal reaches its
-// end through the chain alone. Verifier keys are the real ones when built, else placeholders
-// (the local chain does not check proofs).
+// end through the chain alone. Verifier keys are the real ones when built, else one real key
+// for every circuit (the local chain does not check proofs).
 
 const root = `${import.meta.dir}/../..`;
 const keys = keyMaterial(root);
-const verifierKey = async (circuit: string) => (existsSync(`${root}/contracts/build/deal/keys/${circuit}.verifier`) ? (await keys.lookupKey(circuit)).verifierKey : new Uint8Array(32).fill(1));
+// Without built keys (ci.yml has no prover), every circuit gets any.verifier: a real verifier key
+// of one small circuit, kept here because the ledger accepts nothing but a well-formed key.
+const verifierKey = async (circuit: string) => (existsSync(`${root}/contracts/build/deal/keys/${circuit}.verifier`) ? (await keys.lookupKey(circuit)).verifierKey : Bun.file(`${import.meta.dir}/any.verifier`).bytes());
 
 /** Waits for a table state that satisfies `ok`, or fails after `ms`. */
 function until(ref: LiveReferee, ok: (s: TableState) => boolean, ms = 60_000): Promise<TableState> {
