@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import type { Avatar } from "./avatars.ts";
+import { type Avatar, palm } from "./avatars.ts";
 import { CARD_H, CARD_W, cardBack } from "./cards.ts";
+import { recolour } from "./look.ts";
 import { DEALER_POSE } from "./table.ts";
 
 /**
@@ -11,6 +12,14 @@ import { DEALER_POSE } from "./table.ts";
  * own patch of the atlas.
  */
 export function dressAsDealer(avatar: Avatar) {
+  // Our own dealer (scripts/make-character.py) comes in a waistcoat and bow tie: the cloth burgundy, and done.
+  let outfit: THREE.MeshStandardMaterial | undefined;
+  avatar.root.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh && !Array.isArray(m.material) && m.material.name.endsWith("_outfit")) outfit = m.material as THREE.MeshStandardMaterial;
+  });
+  if (outfit) return recolour(outfit, new THREE.Color(0x8a1222)); // reads burgundy under the warm lamp; darker went brown
+
   let bodyMesh: THREE.Mesh | undefined;
   avatar.root.traverse((o) => {
     const m = o as THREE.Mesh;
@@ -86,15 +95,18 @@ export const DEAL_FROM = DEALER_POSE.position.clone().add(DEALER_POSE.position.c
 export function deckInHand(avatar: Avatar): THREE.Mesh {
   const paper = new THREE.MeshLambertMaterial({ color: 0xf6f1e6 });
   const deck = new THREE.Mesh(new THREE.BoxGeometry(CARD_W, 0.016, CARD_H), [paper, paper, cardBack(), cardBack(), paper, paper]);
-  avatar.root.updateMatrixWorld(true);
-  const left = new THREE.Vector3();
-  const right = new THREE.Vector3();
-  avatar.hand("L").getWorldPosition(left);
-  avatar.hand("R").getWorldPosition(right);
-  // In the left palm, a little toward the right hand and up out of the fingers.
-  deck.position.copy(left).lerp(right, 0.22).add(new THREE.Vector3(0, 0.035, 0));
-  deck.rotation.y = DEALER_POSE.yaw + 0.25; // held a little askew, as a dealer does
-  deck.rotation.x = 0.15;
+  // On the left palm itself (found from the finger bones), lying in the palm's own plane: it
+  // rides with the hand and cannot drift off into the air between the hands.
+  const p = palm(avatar, "L");
+  if (p) {
+    deck.position.copy(p.position).addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion), 0.008);
+    // Held a little askew in the palm, as a dealer does.
+    deck.quaternion.copy(p.quaternion).multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 0.25));
+  } else {
+    avatar.root.updateMatrixWorld(true);
+    avatar.hand("L").getWorldPosition(deck.position);
+    deck.rotation.y = DEALER_POSE.yaw + 0.25;
+  }
   DEAL_FROM.copy(deck.position);
   avatar.root.parent?.add(deck);
   avatar.hand("L").attach(deck);

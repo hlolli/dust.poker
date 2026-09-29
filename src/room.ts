@@ -1,16 +1,21 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
+import { type Fx, fxOn, lightTable, postprocessing, reflectRoom, shadowed } from "./scene/fx.ts";
+import { texturesReady } from "./scene/materials.ts";
 import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
-import type { Action, Referee } from "./referee/types.ts";
+import type { Action, Referee, TableState } from "./referee/types.ts";
 import { createSeat } from "./scene/avatar.ts";
-import { type Avatar, cardAnchor, eyePosition, hideOwnHead, idleFace, loadAvatar, poseHands, poseSeated, poseStanding, poseWalking } from "./scene/avatars.ts";
+import { type Avatar, cardAnchor, dealerReach, drawIn, eyePosition, loadAvatar, poseDealer, poseHands, poseSeated, poseStanding, poseWalking, showOwnHead } from "./scene/avatars.ts";
+import { Manner } from "./scene/manner.ts";
+import { Cinema, SHOTS } from "./scene/cinema.ts";
+import { type Attention, Life } from "./scene/life.ts";
 import { BAR, BARTENDER_POSE, createBar } from "./scene/bar.ts";
 import { attachControls } from "./scene/controls.ts";
 import { deckInHand, dressAsDealer } from "./scene/dealer.ts";
 import { applyLook } from "./scene/look.ts";
 import { startLounge } from "./scene/lounge.ts";
-import { MODELS, STAFF_MODEL } from "./scene/models.ts";
+import { MODELS, STAFF } from "./scene/models.ts";
 import { Rail } from "./scene/rail.ts";
 import { createRoom } from "./scene/room.ts";
 import { createSplash } from "./scene/splash.ts";
@@ -45,12 +50,14 @@ export async function enterRoom(entry: Entry) {
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.xr.enabled = true;
   document.body.append(renderer.domElement);
+  const stats = { frames: 0 }; // inspection handle: window.__stats.frames, for a frame-rate check on any device
+  Object.assign(window as unknown as Record<string, unknown>, { __stats: stats });
   // Browser first: the VR entry button appears only where WebXR says a headset session is
   // possible, so a desktop browser never shows a warning about it.
   void navigator.xr?.isSessionSupported("immersive-vr").then((ok) => ok && document.body.append(VRButton.createButton(renderer)));
 
   const scene = new THREE.Scene();
-  // Marble and brass need something to reflect; a generated room environment is cheap and enough.
+  // A stand-in to reflect until the hall's own reflection is taken (reflectRoom, below).
   const pmrem = new THREE.PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   scene.environmentIntensity = 0.35;
@@ -73,12 +80,23 @@ export async function enterRoom(entry: Entry) {
   scene.add(seats);
   // Nothing above ever moves: world matrices once, then no per-frame matrix work.
   for (const o of [room, table, bar, seats, splash]) freeze(o);
+  if (fxOn()) lightTable(renderer, scene, [room, table, bar, seats, splash]);
+  void reflectRoom(renderer, scene, [room, table, bar, seats, splash], texturesReady());
 
   // One character per seat, seated and facing the table: yours from the profile, the bots the
   // rest. They load while you walk in; whoever is there when you sit hands you the cards.
   const yours = MODELS[profile.look.model] ?? MODELS[0]!;
   const others = MODELS.filter((m) => m !== yours);
   const avatars: (Avatar | null)[] = Array.from({ length: SEAT_COUNT }, () => null);
+  /** What moves each character between poses (scene/life.ts): the seats' and the staff's. */
+  const lives = new Map<Avatar, Life>();
+  let dealerAvatar: Avatar | null = null;
+  /** How each seated player handles their cards and rests (scene/manner.ts), once their cards are theirs. */
+  const manners: (Manner | null)[] = Array.from({ length: SEAT_COUNT }, () => null);
+  /** The pot on its way to the winners: the dealer pushes it, the winners draw it in. */
+  let pot: { start: number; ms: number; piles: { seat: number; pile: THREE.Object3D }[] } | null = null;
+  /** The last table state, for where everyone's attention goes. */
+  let tableState: TableState | null = null;
   /** Camera position inside the rig once seated: your avatar's eyes, or a default seated eye height. */
   const seatedEye = new THREE.Vector3(0, EYE_HEIGHT, 0);
   /** Your arrival, once your character has loaded; null when you are seated. */
@@ -98,14 +116,16 @@ export async function enterRoom(entry: Entry) {
           applyLook(a, profile.look);
           a.root.position.copy(ENTRANCE);
           poseWalking(a, 0);
-          scene.add(a.root);
+          scene.add(fxOn() ? shadowed(a.root) : a.root);
           avatars[i] = a;
+          lives.set(a, new Life(a, { seed: i, head: false }));
           entrance = { avatar: a, t0: performance.now() + 300 };
           return;
         }
         poseSeated(a, 0.5);
-        scene.add(a.root);
+        scene.add(fxOn() ? shadowed(a.root) : a.root);
         avatars[i] = a;
+        lives.set(a, new Life(a, { seed: i }));
         attachCards?.(i, a);
       })
       .catch((e) => console.warn(`avatar ${i} failed to load`, e));
@@ -117,18 +137,20 @@ export async function enterRoom(entry: Entry) {
     ["bartender", BARTENDER_POSE.position, BARTENDER_POSE.rotationY],
     ["dealer", DEALER_POSE.position, DEALER_POSE.yaw + AVATAR_FACING],
   ] as const) {
-    loadAvatar(STAFF_MODEL)
+    loadAvatar(STAFF[name])
       .then((a) => {
         a.root.position.copy(position);
         a.root.rotation.y = yaw;
         a.root.name = name;
-        poseStanding(a);
-        scene.add(a.root);
+        if (name === "dealer") poseDealer(a);
+        else poseStanding(a);
+        scene.add(fxOn() ? shadowed(a.root) : a.root);
         if (name === "dealer") {
           dressAsDealer(a);
           deckInHand(a);
+          dealerAvatar = a;
         }
-        avatars.push(a); // blinks with the rest
+        lives.set(a, new Life(a, { seed: name === "dealer" ? 11 : 12, standing: true }));
       })
       .catch((e) => console.warn(`${name} failed to load`, e));
   }
@@ -168,6 +190,22 @@ export async function enterRoom(entry: Entry) {
   window.addEventListener("keydown", (e) => {
     if (e.key === "m" || e.key === "M") mute.click();
   });
+
+  // Back to the main menu. The page reloads into it: the simplest full teardown of the scene,
+  // the renderer and the band, and the page's own address (network, table) is kept.
+  const leave = document.createElement("button");
+  leave.className = "leave";
+  leave.type = "button";
+  leave.textContent = "Leave table";
+  leave.title = entry.mode === "live" ? "Back to the menu. Your seat and chips stay yours at the table; take a seat again to come back." : "Back to the menu";
+  leave.onclick = () => {
+    // On a Live table your client does your steps in a deal; gone, it misses them, and a missed
+    // step past its deadline can cost your bond (ADR 0006). Between deals nothing is owed.
+    const dealing = entry.mode === "live" && tableState !== null && tableState.street !== "between" && tableState.seats[YOU]?.inHand;
+    if (dealing && !confirm("A deal is under way. Leaving now misses your turns in it, and the table can charge your bond for that. Leave anyway?")) return;
+    location.reload();
+  };
+  document.body.append(leave);
 
   // The entrance: a timeline from the moment your character has loaded. Walk to the side of
   // your chair, pull it out from the table, step in front of it, sit as it slides back under
@@ -222,17 +260,18 @@ export async function enterRoom(entry: Entry) {
       avatar.root.position.lerpVectors(beside, inFront, smooth(k));
     } else if (stage === 3) {
       // Sitting: the body lowers onto the chair and rides in with it as it slides back under the table.
-      if (!standingY) {
-        standingY = avatar.root.position.y || 0.001;
-        avatar.root.position.copy(inFront);
-        poseSeated(avatar, 0.5);
-        poseHands(avatar, false, LIFT);
-        seatedY = avatar.root.position.y;
-      }
+      sitOnce(avatar);
       const e = smooth(k);
       avatar.root.position.copy(seat.position).addScaledVector(outward, pulled * (1 - e));
       avatar.root.position.y = THREE.MathUtils.lerp(standingY, seatedY, Math.min(1, e * 1.4));
       chair.position.copy(chairAt).addScaledVector(outward, pulled * (1 - e));
+    }
+    if (stage >= 4) {
+      // Seated, however the clock got here: a page that stops drawing for a while (a hidden tab,
+      // a busy browser) comes back with the clock past the sitting stage, which must not be skipped.
+      sitOnce(avatar);
+      avatar.root.position.copy(seat.position).setY(seatedY);
+      chair.position.copy(chairAt);
     }
     const facing = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), avatar.root.rotation.y);
     // The camera: over your shoulder while you are on your feet, then into your eyes.
@@ -252,8 +291,10 @@ export async function enterRoom(entry: Entry) {
       const look = new THREE.Quaternion().setFromEuler(new THREE.Euler(-0.35, seat.yaw, 0, "YXZ"));
       camera.position.lerpVectors(cameraFrom.position, eye, smooth(k));
       camera.quaternion.slerpQuaternions(cameraFrom.quaternion, look, smooth(k));
+      // Gone before the camera reaches it: otherwise the last of the move is seen from inside the face.
+      if (camera.position.distanceTo(eye) < 0.5) showOwnHead(avatar, false);
       if (k >= 1) {
-        hideOwnHead(avatar);
+        showOwnHead(avatar, false);
         rig.attach(camera);
         camera.position.copy(seatedEye);
         camera.rotation.set(-0.35, 0, 0, "YXZ");
@@ -261,6 +302,17 @@ export async function enterRoom(entry: Entry) {
         void sitDown();
       }
     }
+  }
+
+  /** Poses you seated, once: from where you stand in front of the pulled-out chair, facing the table. */
+  function sitOnce(avatar: Avatar) {
+    if (standingY) return;
+    standingY = avatar.root.position.y || 0.001;
+    avatar.root.position.copy(inFront);
+    avatar.root.rotation.y = facingTable;
+    poseSeated(avatar, 0.5);
+    poseHands(avatar, "rail", LIFT);
+    seatedY = avatar.root.position.y;
   }
 
   let view: TableView | null = null;
@@ -277,6 +329,21 @@ export async function enterRoom(entry: Entry) {
       referee = new ContractReferee({ names, you: YOU });
     }
     const tableView = (view = new TableView(YOU));
+    // A deal won: the pot slides to each winner, the dealer pushing it off and the winner drawing
+    // it in; on a screen, the camera makes a film shot of it meanwhile.
+    tableView.onAward = (piles, ms) => {
+      const now = performance.now();
+      pot = { start: now, ms, piles };
+      for (const { seat } of piles) {
+        // Cards out of the hands first, face up if they were shown, so the hands are free for the chips.
+        tableView.placeCards(seat, true, 380, tableState?.seats[seat]?.hole != null && seat !== YOU);
+        manners[seat]?.busy(now + ms + 200);
+      }
+      if (renderer.xr.isPresenting) return;
+      const winner = seatPose(piles[0]!.seat).position;
+      const shot = SHOTS[Math.floor(Math.random() * SHOTS.length)]!;
+      cinema.start(now, ms + 2200, shot, () => piles[0]!.pile.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.12, 0)), winner, DEALER_POSE.position);
+    };
     const act = (a: Action) => referee.act(a).catch(console.warn);
     const show = () => referee.show().catch(console.warn);
     // Browser: the bar at the bottom of the page. Headset: the rail in front of the seat.
@@ -293,12 +360,15 @@ export async function enterRoom(entry: Entry) {
       hand.el.hidden = renderer.xr.isPresenting;
     };
     renderer.xr.addEventListener("sessionstart", inXR);
+    renderer.xr.addEventListener("sessionstart", () => cinema.end()); // the headset is the camera now
     renderer.xr.addEventListener("sessionend", inXR);
     scene.add(tableView.group, rail.group);
     attachCards = (i, avatar) => {
       const lift = i === YOU ? LIFT : 0;
-      poseHands(avatar, true, lift); // the anchor is measured from the hands, so pose them first
-      tableView.attachHoleCards(i, cardAnchor(avatar, lift), (holding) => poseHands(avatar, holding, lift));
+      poseHands(avatar, "hold", lift); // the anchor is measured from the hands, so pose them first
+      tableView.attachHoleCards(i, cardAnchor(avatar, lift));
+      // From here on the seat's manner (scene/manner.ts) handles its cards and arms.
+      manners[i] = new Manner(avatar, i, tableView, i === YOU, lift);
     };
     avatars.forEach((a, i) => a && attachCards!(i, a));
     onSelect = rail.onSelect;
@@ -310,6 +380,8 @@ export async function enterRoom(entry: Entry) {
       // Empty seats have no one in them: a Live table fills as players join.
       avatars.forEach((a, i) => i !== YOU && i < SEAT_COUNT && a && (a.root.visible = s.seats[i]!.name !== null));
       (window as unknown as Record<string, unknown>).__table = s; // inspection handle, like __scene
+      react(s);
+      tableState = s;
     });
     Object.assign(window as unknown as Record<string, unknown>, { __referee: referee });
     void Promise.resolve(referee.start()).catch(console.error);
@@ -325,13 +397,92 @@ export async function enterRoom(entry: Entry) {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    fx?.setSize(window.innerWidth, window.innerHeight);
   }
 
+  // Ambient occlusion and the rest run outside XR only: presenting, three renders each eye itself.
+  // The film shot at a deal's end; your head shows while the camera is out of it.
+  const cinema = new Cinema(scene, camera, rig, (out) => {
+    const me = avatars[YOU];
+    if (me) showOwnHead(me, out);
+  });
+  const fx: Fx | null = fxOn() ? postprocessing(renderer, scene, camera) : null;
   renderer.setAnimationLoop((now) => {
+    stats.frames++;
     fitViewport();
-    for (const a of avatars) if (a) idleFace(a, now);
     view?.animate(now);
     entranceFrame(now);
-    renderer.render(scene, camera);
+    cinema.frame(now);
+    for (const m of manners) m?.update(now, tableState);
+    dealerFrame(now);
+    const heads = avatars.map((a) => (a?.root.visible ? headOf(a) : null));
+    const moved = [...lives].filter(([a]) => a.root.visible);
+    for (const [a, life] of moved) life.apply(now, attention(a, heads));
+    if (fx && !renderer.xr.isPresenting) fx.render();
+    else renderer.render(scene, camera);
+    for (const [, life] of moved) life.restore();
   });
+
+  /** How far the dealer's right hand is up over the deck: up while he deals, down at his side otherwise. */
+  let dealerUp = 0;
+  let dealerLast = 0;
+  /** The dealer's right hand this frame: over the deck while cards fly, out after the pot, else at rest. */
+  function dealerFrame(now: number) {
+    const dt = Math.min(0.1, dealerLast ? (now - dealerLast) / 1000 : 0);
+    dealerLast = now;
+    dealerUp += ((view?.dealing ? 1 : 0) - dealerUp) * (1 - Math.exp(-8 * dt));
+    const target = potFrame(now);
+    if (dealerAvatar) dealerReach(dealerAvatar, target, dealerUp);
+  }
+
+  /** The pot's journey this frame: the winners' hands round it, and where the dealer's hand goes after it, if anywhere. */
+  function potFrame(now: number): THREE.Vector3 | null {
+    if (!pot) return null;
+    const t = (now - pot.start) / pot.ms;
+    if (t >= 1) {
+      pot = null;
+      return null;
+    }
+    for (const { seat, pile } of pot.piles) {
+      const a = avatars[seat];
+      if (a && t > 0.42) drawIn(a, pile.getWorldPosition(new THREE.Vector3()));
+    }
+    return t > 0.18 && t < 0.6 ? pot.piles[0]!.pile.getWorldPosition(new THREE.Vector3()) : null;
+  }
+
+  function headOf(a: Avatar): THREE.Vector3 {
+    return (a.bones.get("Bip01 Head") ?? a.root).getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.08, 0));
+  }
+
+  /** Where `a` may look: at whoever is to act, the dealer's hands while cards go out, the winner after; or a neighbour. */
+  function attention(a: Avatar, heads: (THREE.Vector3 | null)[]): Attention {
+    const seat = avatars.indexOf(a);
+    const others = heads.filter((h, i): h is THREE.Vector3 => !!h && i !== seat);
+    if (dealerAvatar && a !== dealerAvatar) others.push(headOf(dealerAvatar));
+    let focus: THREE.Vector3 | null = null;
+    if (tableState?.toAct != null) focus = heads[tableState.toAct] ?? null;
+    else if (tableState?.street === "between") focus = heads[tableState.seats.findIndex((x) => x.isWinner)] ?? null;
+    if (!focus && dealerAvatar) focus = dealerAvatar.hand("R").getWorldPosition(new THREE.Vector3());
+    // Out of the hand and holding nothing: folded, or between deals. The staff are always at work.
+    const me = seat >= 0 ? tableState?.seats[seat] : undefined;
+    const idle = !!me && !!manners[seat]?.idle;
+    return { focus, others, deciding: seat >= 0 && tableState?.toAct === seat, idle };
+  }
+
+  /** A smile for the winners when a deal ends, a frown for those who lost at the showdown or folded. */
+  let reactedTo = "";
+  function react(s: TableState) {
+    const now = performance.now();
+    s.seats.forEach((seat, i) => {
+      const a = avatars[i];
+      const folding = seat.folded && tableState && !tableState.seats[i]!.folded;
+      if (a && folding) lives.get(a)?.react("lose", now);
+    });
+    if (s.street !== "between" || !s.seats.some((x) => x.isWinner) || s.message === reactedTo) return;
+    reactedTo = s.message;
+    s.seats.forEach((seat, i) => {
+      const a = avatars[i];
+      if (a && seat.name !== null && (seat.isWinner || seat.inHand)) lives.get(a)?.react(seat.isWinner ? "win" : "lose", now);
+    });
+  }
 }

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { darkWood, velvet } from "./materials.ts";
+import { darkWood, felt } from "./materials.ts";
 
 export const SEAT_COUNT = 6;
 export const TABLE_RADIUS = 1.1;
@@ -7,6 +7,9 @@ export const TABLE_RADIUS = 1.1;
 export const SEAT_RADIUS = 1.6;
 /** Eye height of a seated adult; XR headsets override it. */
 export const EYE_HEIGHT = 1.2;
+/** The padded rail round the felt: the middle of its tube from the table's centre, and the top of it. */
+export const RAIL_RADIUS = TABLE_RADIUS + 0.04;
+export const RAIL_TOP = 0.86;
 
 /** Seat i sits on a circle around the table, facing the centre. Seat 0 is at +z. */
 export function seatPose(i: number): { position: THREE.Vector3; yaw: number } {
@@ -29,16 +32,16 @@ export const DEALER_POSE = (() => {
 export function createTable(): THREE.Group {
   const g = new THREE.Group();
   g.name = "table";
-  const felt = velvet(0x0f4a34, 4);
+  const baize = felt(0x0a4d33); // casino green: under the warm lamp a greyer green reads olive
   const wood = darkWood(2);
 
-  const top = new THREE.Mesh(new THREE.CylinderGeometry(TABLE_RADIUS, TABLE_RADIUS, 0.06, 64), felt);
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(TABLE_RADIUS, TABLE_RADIUS, 0.06, 64), baize);
   top.position.y = 0.75;
   g.add(top);
 
-  const rail = new THREE.Mesh(new THREE.TorusGeometry(TABLE_RADIUS + 0.04, 0.08, 16, 96), wood);
+  const rail = new THREE.Mesh(new THREE.TorusGeometry(RAIL_RADIUS, 0.08, 16, 96), wood);
   rail.rotation.x = Math.PI / 2;
-  rail.position.y = 0.78;
+  rail.position.y = RAIL_TOP - 0.08;
   g.add(rail);
 
   const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.72, 24), wood);

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { type Avatar, idleFace, loadAvatar, poseStanding } from "../scene/avatars.ts";
+import { type Avatar, loadAvatar, poseStanding } from "../scene/avatars.ts";
+import { Life } from "../scene/life.ts";
 import { applyLook, DEFAULT_LOOK, type Look, OUTFIT_COLOURS } from "../scene/look.ts";
 import { MODELS } from "../scene/models.ts";
 
@@ -47,6 +48,7 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
     camera.position.set(0, 1.05, 3.6);
     camera.lookAt(0, 0.95, 0);
     let avatar: Avatar | null = null;
+    let life: Life | null = null;
     let loading = 0;
     const setModel = async (model: number) => {
       const id = ++loading;
@@ -56,6 +58,7 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
       avatar = a;
       a.root.rotation.y = 0; // toward the camera
       poseStanding(a);
+      life = new Life(a, { seed: model, standing: true });
       applyLook(a, look);
       scene.add(a.root);
     };
@@ -72,11 +75,11 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
     };
     const loop = (now: number) => {
       size();
-      if (avatar) {
-        avatar.root.rotation.y = Math.sin(now / 4000) * 0.6;
-        idleFace(avatar, now);
-      }
+      if (avatar) avatar.root.rotation.y = Math.sin(now / 4000) * 0.6;
+      // Mostly at you, as into a mirror: the camera is where you stand.
+      life?.apply(now, { focus: camera.position, others: [], deciding: false });
       renderer.render(scene, camera);
+      life?.restore();
       frame = requestAnimationFrame(loop);
     };
     frame = requestAnimationFrame(loop);

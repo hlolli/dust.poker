@@ -33,10 +33,50 @@ export function applyLook(avatar: Avatar, look: Look) {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh || Array.isArray(mesh.material)) return;
     const material = mesh.material as THREE.MeshStandardMaterial;
+    // Rocketbox characters: skin and clothing in one body texture, the head apart.
     if (material.name.endsWith("_body")) repaintBody(mesh, material, skinScale, outfit);
     else if (material.name.endsWith("_head")) material.color.setScalar(skinScale);
+    // Our own (scripts/make-character.py): the skin a texture of its own, the main garment another.
+    else if (material.name.endsWith("_skin")) material.color.setScalar(skinScale);
+    else if (material.name.endsWith("_outfit")) recolour(material, outfit);
   });
   avatar.root.scale.setScalar(look.height);
+}
+
+/**
+ * Recolours a garment's texture: the cloth takes `colour` and keeps its own shading, while what
+ * is near white or near black (a shirt front, lapels, buttons, a bow tie's shadow) stays as it
+ * is. For a garment with a texture of its own, as our own characters' are.
+ */
+export function recolour(material: THREE.MeshStandardMaterial, colour: THREE.Color) {
+  const original: THREE.Texture = (material.userData.original ??= material.map);
+  if (!original) return;
+  const image = original.image as ImageBitmap | HTMLImageElement;
+  const c = document.createElement("canvas");
+  c.width = image.width;
+  c.height = image.height;
+  const ctx = c.getContext("2d")!;
+  ctx.drawImage(image, 0, 0);
+  const px = ctx.getImageData(0, 0, c.width, c.height);
+  const d = px.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const lum = (0.3 * d[i]! + 0.59 * d[i + 1]! + 0.11 * d[i + 2]!) / 255;
+    if (lum < 0.04 || lum > 0.72) continue;
+    const k = Math.min(1.8, lum * 3 + 0.25);
+    d[i] = Math.min(255, Math.round(colour.r * 255 * k));
+    d[i + 1] = Math.min(255, Math.round(colour.g * 255 * k));
+    d[i + 2] = Math.min(255, Math.round(colour.b * 255 * k));
+  }
+  ctx.putImageData(px, 0, 0);
+  const map = new THREE.CanvasTexture(c);
+  map.flipY = original.flipY;
+  map.colorSpace = original.colorSpace;
+  map.wrapS = original.wrapS;
+  map.wrapT = original.wrapT;
+  map.anisotropy = original.anisotropy;
+  if (material.map !== original) material.map?.dispose();
+  material.map = map;
+  material.needsUpdate = true;
 }
 
 function repaintBody(mesh: THREE.Mesh, material: THREE.MeshStandardMaterial, skinScale: number, outfit: THREE.Color) {

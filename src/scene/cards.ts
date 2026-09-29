@@ -44,6 +44,7 @@ function texture(face: Card | "back"): THREE.CanvasTexture {
   }
   const t = new THREE.CanvasTexture(c);
   t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 16; // the board lies nearly edge-on to a seated player; without it the faces blur to grey
   return t;
 }
 
@@ -52,8 +53,9 @@ export const cardBack = () => material("back");
 
 function material(face: Card | "back"): THREE.MeshLambertMaterial {
   let m = materials.get(face);
-  // The rounded corners are transparent on the canvas; without alpha they render black.
-  if (!m) materials.set(face, (m = new THREE.MeshLambertMaterial({ map: texture(face), transparent: true, alphaTest: 0.5 })));
+  // The rounded corners are transparent on the canvas; cut out by alpha, else they render black.
+  // A cutout, not blending: blended cards sort against the label plates and lose.
+  if (!m) materials.set(face, (m = new THREE.MeshLambertMaterial({ map: texture(face), alphaTest: 0.5, alphaToCoverage: true })));
   return m;
 }
 
@@ -71,6 +73,8 @@ export class CardMesh {
     const back = new THREE.Mesh(geometry, material("back"));
     back.rotation.y = Math.PI;
     back.position.z = -0.0003;
+    this.front.castShadow = back.castShadow = true; // the alpha test keeps the rounded corners out of the shadow too
+    this.front.receiveShadow = back.receiveShadow = true;
     this.mesh.add(this.front, back);
     this.mesh.rotation.x = -Math.PI / 2;
     this.mesh.visible = false;

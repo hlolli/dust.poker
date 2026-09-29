@@ -31,61 +31,100 @@ function strut(from: THREE.Vector3, to: THREE.Vector3, radius: number, material:
   return m;
 }
 
-/** Trencadis: broken tiles in Gaudi's palette on dark grout, as a repeating texture. */
-function mosaicTexture(repeatX = 8, repeatY = 2): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = c.height = 512;
-  const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#2a2622";
-  ctx.fillRect(0, 0, 512, 512);
-  const palette = ["#1f6fb2", "#2aa198", "#e0b341", "#f2ebdc", "#c8562f", "#8fbf4f", "#f2f2f2"];
-  let seed = 7;
-  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
-  for (let y = 0; y < 512; y += 24) {
-    for (let x = 0; x < 512; x += 24) {
-      ctx.fillStyle = palette[Math.floor(rnd() * palette.length)]!;
-      const w = 16 + rnd() * 8;
-      const h = 16 + rnd() * 8;
-      ctx.beginPath();
-      ctx.moveTo(x + rnd() * 4, y + rnd() * 4);
-      ctx.lineTo(x + w, y + rnd() * 5);
-      ctx.lineTo(x + w - rnd() * 6, y + h);
-      ctx.lineTo(x + rnd() * 5, y + h - rnd() * 4);
-      ctx.closePath();
-      ctx.fill();
+/** A seeded random in [0, 1): the same room on every visit. */
+function seeded(seed: number): () => number {
+  return () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
+}
+
+/**
+ * Cells around jittered points on a grid that wraps, so the texture tiles: for every pixel the
+ * nearest point and how far it is from the second nearest, which is zero on a cell border.
+ * What both the glass (lead between panes) and the trencadis (grout between shards) are cut from.
+ */
+function cells(w: number, h: number, cols: number, rows: number, rnd: () => number) {
+  const pts: [number, number][] = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) pts.push([((c + 0.15 + rnd() * 0.7) / cols) * w, ((r + 0.15 + rnd() * 0.7) / rows) * h]);
+  const owner = new Int32Array(w * h);
+  const edge = new Float32Array(w * h);
+  const cw = w / cols;
+  const ch = h / rows;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let best = Infinity;
+      let second = Infinity;
+      let who = 0;
+      const gc = Math.floor(x / cw);
+      const gr = Math.floor(y / ch);
+      for (let dr = -2; dr <= 2; dr++) {
+        for (let dc = -2; dc <= 2; dc++) {
+          const c = (gc + dc + cols) % cols;
+          const r = (gr + dr + rows) % rows;
+          const [px, py] = pts[r * cols + c]!;
+          // Nearest copy of the point across the wrap.
+          const dx = x - px - Math.round((x - px) / w) * w;
+          const dy = y - py - Math.round((y - py) / h) * h;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < best) [second, best, who] = [best, d, r * cols + c];
+          else if (d < second) second = d;
+        }
+      }
+      owner[y * w + x] = who;
+      edge[y * w + x] = second - best;
     }
   }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return { owner, edge, count: pts.length };
+}
+
+/** Paints cells into a canvas texture: a colour per cell, a line of `lineColor` `lineWidth` px wide between them. */
+function cellTexture(w: number, h: number, cols: number, rows: number, seed: number, colour: (rnd: () => number) => [number, number, number], lineColor: [number, number, number], lineWidth: number, shade: number): THREE.CanvasTexture {
+  const rnd = seeded(seed);
+  const { owner, edge, count } = cells(w, h, cols, rows, rnd);
+  const fills = Array.from({ length: count }, () => colour(rnd));
+  const c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext("2d")!;
+  const img = ctx.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const [r, g, b] = fills[owner[i]!]!;
+    // Softly darker towards the border, as glass is thicker and glaze pools at a shard's edge.
+    const e = edge[i]!;
+    const t = e < lineWidth ? 1 : 0;
+    const k = 1 - shade * Math.exp(-(e - lineWidth) / 6);
+    img.data[i * 4] = t ? lineColor[0] : r * k;
+    img.data[i * 4 + 1] = t ? lineColor[1] : g * k;
+    img.data[i * 4 + 2] = t ? lineColor[2] : b * k;
+    img.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+const hex = (s: string): [number, number, number] => [parseInt(s.slice(1, 3), 16), parseInt(s.slice(3, 5), 16), parseInt(s.slice(5, 7), 16)];
+/** Picks from `palette` with the weights given, and varies the pick's brightness a little. */
+const weighted = (palette: [string, number][], vary: number) => (rnd: () => number): [number, number, number] => {
+  let x = rnd() * palette.reduce((s, [, wt]) => s + wt, 0);
+  const [colour] = palette.find(([, wt]) => (x -= wt) < 0) ?? palette[0]!;
+  const k = 1 - vary / 2 + rnd() * vary;
+  return hex(colour).map((v) => Math.min(255, v * k)) as [number, number, number];
+};
+
+/** Trencadis: broken glazed tiles on pale grout, mostly white and cobalt with ochre and green, as at Park Guell. */
+function mosaicTexture(repeatX = 8, repeatY = 2): THREE.CanvasTexture {
+  const palette: [string, number][] = [["#ece6d6", 5], ["#1d4f9a", 4], ["#3f7fc4", 2], ["#d9a530", 1.4], ["#4f8a4a", 1], ["#b8452c", 0.6]];
+  const t = cellTexture(256, 256, 11, 11, 7, weighted(palette, 0.25), [178, 170, 152], 1.6, 0.18);
   t.repeat.set(repeatX, repeatY);
   return t;
 }
 
-/** Stained glass with organic cells, for windows and skylights. */
+/** Stained glass in leaded cells, for windows and skylights: deep colours, lit from outside at night. */
 function glassTexture(): THREE.CanvasTexture {
-  const c = document.createElement("canvas");
-  c.width = 256;
-  c.height = 512;
-  const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#101418";
-  ctx.fillRect(0, 0, 256, 512);
-  // Deep, saturated glass in small cells; the leading is what reads from a distance.
-  const palette = ["#0f5a48", "#173f8f", "#a8701c", "#8f2a1c", "#4a2a7a", "#b89a3a", "#1d6b7a"];
-  let seed = 3;
-  const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
-  for (let i = 0; i < 160; i++) {
-    ctx.fillStyle = palette[Math.floor(rnd() * palette.length)]!;
-    ctx.beginPath();
-    ctx.ellipse(rnd() * 256, rnd() * 512, 9 + rnd() * 16, 12 + rnd() * 22, rnd() * Math.PI, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = "#08080c";
-    ctx.lineWidth = 3;
-    ctx.stroke();
-  }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  return t;
+  const palette: [string, number][] = [["#173f8f", 4], ["#0f5a48", 3], ["#1d6b7a", 2], ["#a8701c", 1.5], ["#8f2a1c", 1.2], ["#4a2a7a", 1.5], ["#c9a650", 0.6]];
+  return cellTexture(256, 512, 7, 13, 3, weighted(palette, 0.35), [10, 10, 12], 2.2, 0.45);
 }
 
 export function createRoom(): THREE.Group {
@@ -96,11 +135,12 @@ export function createRoom(): THREE.Group {
   const stoneMat = stone(1);
   // Backlit glass: unlit, the texture is the light. Windows are cut as a shape, whose UVs
   // are the shape's own metres, so their copy of the texture is scaled to the window.
-  const glassMat = new THREE.MeshBasicMaterial({ map: glassTexture(), side: THREE.DoubleSide });
+  // Night: the glass glows faintly with what comes in from outside, never brighter than the lamps inside.
+  const glassMat = new THREE.MeshBasicMaterial({ map: glassTexture(), color: 0x8a8a9a, side: THREE.DoubleSide });
   const windowGlass = glassTexture();
   windowGlass.repeat.set(0.5, 0.19);
   windowGlass.offset.set(0.5, 0.42);
-  const windowGlassMat = new THREE.MeshBasicMaterial({ map: windowGlass, side: THREE.DoubleSide });
+  const windowGlassMat = new THREE.MeshBasicMaterial({ map: windowGlass, color: 0x6a6f86, side: THREE.DoubleSide });
   const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffc46b, emissiveIntensity: 2.4 });
   const bulbGeometry = new THREE.SphereGeometry(0.045, 10, 8);
 
@@ -109,7 +149,7 @@ export function createRoom(): THREE.Group {
   floor.rotation.x = -Math.PI / 2;
   g.add(floor);
   // RingGeometry maps UVs flat across the disc, so an equal repeat keeps the tiles square.
-  const mosaic = new THREE.Mesh(new THREE.RingGeometry(3.25, 4.3, 96), new THREE.MeshStandardMaterial({ map: mosaicTexture(5, 5), roughness: 0.5 }));
+  const mosaic = new THREE.Mesh(new THREE.RingGeometry(3.25, 4.3, 96), new THREE.MeshStandardMaterial({ map: mosaicTexture(9, 9), roughness: 0.3 }));
   mosaic.rotation.x = -Math.PI / 2;
   mosaic.position.y = 0.003;
   g.add(mosaic);
@@ -209,7 +249,7 @@ export function createRoom(): THREE.Group {
   // small round skylight where each branch meets the ceiling. Parabolic brass arches run
   // along the arcade and across the nave, each hung with a string of bulbs.
   const trunk = new THREE.CylinderGeometry(0.26, 0.34, SPRING, 20);
-  const trunkMat = new THREE.MeshStandardMaterial({ map: mosaicTexture(2, 3), roughness: 0.45 }); // trencadis-clad, as at Park Guell
+  const trunkMat = new THREE.MeshStandardMaterial({ map: mosaicTexture(3, 6), roughness: 0.28 }); // trencadis-clad and glazed, as at Park Guell
   const collar = new THREE.TorusGeometry(0.34, 0.05, 10, 32);
   const skylight = new THREE.CircleGeometry(0.45, 32);
   const bays = Math.floor(d / BAY) - 1;
@@ -323,7 +363,8 @@ export function createRoom(): THREE.Group {
   const moon = new THREE.DirectionalLight(0x8fb3ff, 0.6);
   moon.position.set(8, 6, -4);
   g.add(moon);
-  g.add(new THREE.HemisphereLight(0xffe2b8, 0x1a0e08, 1.0));
+  // A faint fill only: the bounce light comes from the hall's own reflection (fx.ts, reflectRoom).
+  g.add(new THREE.HemisphereLight(0xffe2b8, 0x1a0e08, 0.25));
 
   return g;
 }

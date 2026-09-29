@@ -9,7 +9,8 @@ export const BAR = { x: 6.2, z: 0, length: 6 };
 /** Where the bartender stands: behind the counter, facing the room (-x). */
 export const BARTENDER_POSE = { position: new THREE.Vector3(BAR.x + 0.55, 0, BAR.z), rotationY: -Math.PI / 2 };
 
-const BOTTLE_COLORS = [0xffb347, 0x7cd992, 0x4aa8ff, 0xff5c7a, 0xf2e6c8, 0xc77dff, 0xffe066];
+// What a back bar holds: whisky and rum in amber and brown, gin in green glass, a clear vodka, a red aperitif.
+const BOTTLE_COLORS = [0x8a4a12, 0x5a2e0c, 0x1f5a2a, 0xb07a2a, 0xd8d4c8, 0x7a1414, 0x3a2008];
 
 export function createBar(): THREE.Group {
   const g = new THREE.Group();
@@ -47,7 +48,8 @@ export function createBar(): THREE.Group {
   const neck = new THREE.CylinderGeometry(0.012, 0.012, 0.1, 8);
   const glow = new THREE.MeshStandardMaterial({ color: 0xfff1d6, emissive: 0xffd9a0, emissiveIntensity: 1.5 });
   const bottleMats = BOTTLE_COLORS.map(
-    (c) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.35, roughness: 0.15, transparent: true, opacity: 0.85 }),
+    // Glass: dark, glossy, lit from the strip above and shining with the room it reflects; not lamps of their own.
+    (c) => new THREE.MeshStandardMaterial({ color: c, emissive: c, emissiveIntensity: 0.12, roughness: 0.06, metalness: 0.1, transparent: true, opacity: 0.9 }),
   );
   for (const y of [1.45, 2.05, 2.65]) {
     const shelf = new THREE.Mesh(shelfGeometry, wood);

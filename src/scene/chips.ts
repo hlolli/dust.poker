@@ -23,6 +23,7 @@ export class ChipPile {
   constructor() {
     this.mesh.count = 0;
     this.mesh.frustumCulled = false; // its bounds change with every bet; culling a pile is not worth the bookkeeping
+    this.mesh.castShadow = this.mesh.receiveShadow = true; // costs nothing while the renderer's shadow map is off
   }
 
   set(amount: number) {
