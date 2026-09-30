@@ -92,3 +92,11 @@ export async function snapshot(indexerUri: string, address: string): Promise<Sna
   if (errors?.length || !data) throw new Error(`indexer: ${errors?.map((e) => e.message).join("; ") ?? "no data"}`);
   return { block: seconds(data.block), state: data.contractAction?.state ?? null };
 }
+
+/** The protocol the network runs, from its newest block: 1000300 is node 1.0.3 (ledger 8), 2001000 node 2.1.0 (ledger 9). */
+export async function protocolVersion(indexerUri: string): Promise<number> {
+  const res = await fetch(indexerUri, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "{ block { protocolVersion } }" }) });
+  const v = ((await res.json()) as { data?: { block?: { protocolVersion?: number } } }).data?.block?.protocolVersion;
+  if (v === undefined) throw new Error(`the indexer at ${indexerUri} did not say which protocol it runs`);
+  return v;
+}

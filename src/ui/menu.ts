@@ -3,13 +3,14 @@ import type { Chain } from "../live/chain.ts";
 import type { KeyStore } from "../live/referee.ts";
 import type { Seat } from "../referee/contract.ts";
 import { MODELS } from "../scene/models.ts";
-import { connect, installed, type Wallet } from "../live/wallet.ts";
+import { protocolVersion } from "../live/indexer.ts";
+import { connect, installed, NETWORKS, network as asked, type Wallet } from "../live/wallet.ts";
 import { startBackdrop } from "./backdrop.ts";
 import { showCreator } from "./creator.ts";
 import { activate, activeProfile, createProfile, type Profile, profiles, removeProfile, updateProfile } from "./profiles.ts";
 
-/** The networks Lace can be on; "undeployed" is the one on your machine (README), the only one running ledger 9 so far. */
-const NETWORKS = ["undeployed", "mainnet", "preprod", "preview"];
+/** The first protocol with ledger 9, which the contract and this site are built for (package.json). */
+const LEDGER_9 = 2_000_000;
 
 /**
  * The main menu, before the room loads: the house marquee, then a letterboard with three
@@ -47,7 +48,7 @@ export function showMenu(): Promise<Entry> {
         <section class="line live unlit">
           <div class="listing">
             <span class="title">Live table</span>
-            <span class="sub status">Real chips, refereed on Midnight. Connect Lace to see the tables.</span>
+            <span class="sub status">Test chips on Midnight Preview or Preprod, refereed on chain. Connect Lace to choose.</span>
           </div>
           <div class="row">
             <button class="connect" type="button">Connect Lace</button>
@@ -153,15 +154,18 @@ export function showMenu(): Promise<Entry> {
     let wallet: Wallet | null = null;
     const say = (s: string) => (status.textContent = s);
     const fail = (e: unknown) => say(e instanceof Error ? e.message : String(e));
-    const connected = (w: Wallet) => {
+    const connected = async (w: Wallet) => {
       wallet = w;
       Object.assign(window as unknown as Record<string, unknown>, { __wallet: w }); // inspection handle
-      say(`${w.name} on ${w.networkId}: ${w.address.slice(0, 22)}...${w.address.slice(-6)}`);
       live.classList.remove("unlit");
       network.hidden = false;
-      table.hidden = false;
       for (const r of network.querySelectorAll<HTMLInputElement>("input")) r.checked = r.value === w.networkId;
       connectButton.hidden = true;
+      const who = `${w.name} on ${w.networkId}: ${w.address.slice(0, 22)}...${w.address.slice(-6)}`;
+      // A table needs the ledger the contract was compiled for; a network on an older one cannot run it.
+      const protocol = await protocolVersion(w.config.indexerUri).catch(() => null);
+      table.hidden = protocol !== null && protocol < LEDGER_9;
+      say(table.hidden ? `${who}. ${w.networkId} still runs ledger 8 and dust.poker plays on ledger 9: its tables open when the network upgrades.` : who);
     };
     connectButton.onclick = async () => {
       const [found] = installed();
@@ -170,14 +174,16 @@ export function showMenu(): Promise<Entry> {
       connectButton.disabled = true;
       // Lace connects to one network at a time and wants it named; ask for each until one answers.
       let error: unknown = null;
-      for (const id of NETWORKS) {
+      for (const id of [asked(), ...NETWORKS.filter((n) => n !== asked())]) {
         try {
-          return connected(await connect(found, id));
+          return await connected(await connect(found, id));
         } catch (e) {
           error = e;
         }
       }
       connectButton.disabled = false;
+      // Lace says "Network ID mismatch" when it is on a network other than the one asked for.
+      if (error instanceof Error && /mismatch/i.test(error.message)) return say(`${found.name} is on another network. Switch it to ${NETWORKS.join(" or ")} in its settings, then connect again.`);
       fail(error);
     };
     network.onchange = async (e) => {
@@ -186,7 +192,7 @@ export function showMenu(): Promise<Entry> {
       if (!found) return;
       say(`Switching to ${id}: confirm in the wallet`);
       try {
-        connected(await connect(found, id));
+        await connected(await connect(found, id));
       } catch (err) {
         fail(err);
         if (wallet) for (const r of network.querySelectorAll<HTMLInputElement>("input")) r.checked = r.value === wallet.networkId;
@@ -218,7 +224,7 @@ export function showMenu(): Promise<Entry> {
       withLive("Opening a table", async (mod, w, profile) => {
         const deployed = await mod.deployTable(w, profile);
         address.value = deployed;
-        history.replaceState(null, "", `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), table: deployed })}`);
+        history.replaceState(null, "", `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), network: w.networkId, table: deployed })}`);
         return "The table is open. Its address is in the box and in this page's address: share it.";
       });
   });

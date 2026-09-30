@@ -58,12 +58,14 @@ export type Wallet = {
   api: ConnectedAPI;
 };
 
-// ponytail: ledger 9 (Compact 0.34) is not on a public network yet; the default is the local
-// node from Midnight's docker setup. Change with ?network=<id> or here when the contract deploys.
-export const DEFAULT_NETWORK = "undeployed";
+/**
+ * The networks a Live table can be on: Midnight's public test networks, and on a development
+ * machine the local one (local/README). Mainnet waits until real money has been worked out.
+ */
+export const NETWORKS = ["preview", "preprod", ...(["localhost", "127.0.0.1"].includes(globalThis.location?.hostname ?? "") ? ["undeployed"] : [])];
 
-/** The network the page asks the wallet for: `?network=<id>`, or the default. */
-export const network = () => new URLSearchParams(location.search).get("network") ?? DEFAULT_NETWORK;
+/** The network the page asks the wallet for first: `?network=<id>` (a shared table's link carries it), or Preview. */
+export const network = () => new URLSearchParams(location.search).get("network") ?? NETWORKS[0]!;
 
 /** Wallets in this browser that speak connector API 4.x. */
 export const installed = (): InitialAPI[] => Object.values(window.midnight ?? {}).filter((w) => w.apiVersion.startsWith("4."));
