@@ -13,6 +13,13 @@ jobs:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
       - run: bun run compact:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: compiled-deal
+          path: |
+            contracts/build/deal/contract
+            contracts/build/deal/zkir
+          retention-days: 7
       - run: bun run typecheck
       - run: bun test
       - run: bun run build

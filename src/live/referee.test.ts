@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test";
+import { expect, setSystemTime, test } from "bun:test";
 import { existsSync } from "node:fs";
+import { ContractState as RuntimeContractState } from "@midnight-ntwrk/compact-runtime";
+import * as L from "@midnightntwrk/ledger-v9";
+import { ledger } from "../../contracts/build/deal/contract/index.js";
 import { keyMaterial } from "../../contracts/harness.ts";
 import { Seat } from "../referee/contract.ts";
 import type { TableState } from "../referee/types.ts";
@@ -7,6 +10,8 @@ import { bytes } from "./ledger.ts";
 import { joinOn } from "./live.ts";
 import { LocalChain } from "./local.ts";
 import { type KeyStore, LiveReferee } from "./referee.ts";
+import { callOn } from "./chain.ts";
+import { Phase } from "../referee/rules.ts";
 
 // Two players, each with their own Live referee, play a deal against a chain in memory: every
 // step is a transaction, each client performs only its own seat's, and the deal reaches its
@@ -22,21 +27,145 @@ const verifierKey = async (circuit: string) => (existsSync(`${root}/contracts/bu
 /** Waits for a table state that satisfies `ok`, or fails after `ms`. */
 function until(ref: LiveReferee, ok: (s: TableState) => boolean, ms = 60_000): Promise<TableState> {
   return new Promise((resolve, reject) => {
+    let off = () => {};
+    let done = false;
     const timer = setTimeout(() => {
       off();
       reject(new Error(`timed out waiting: last message "${last?.message}", street ${last?.street}`));
     }, ms);
     let last: TableState | null = null;
-    const off = ref.subscribe((s) => {
+    off = ref.subscribe((s) => {
       last = s;
       if (ok(s)) {
+        done = true;
         clearTimeout(timer);
         off();
         resolve(s);
       }
     });
+    if (done) off(); // subscribe also delivers the current state synchronously
   });
 }
+
+test("joining verifies the locked opening even after other players have joined", async () => {
+  const key = () => Bun.file(`${import.meta.dir}/any.verifier`).bytes();
+  const chain = await LocalChain.deploy(key);
+  const alice = new Seat("Alice");
+  const bob = new Seat("Bob");
+  expect(await joinOn(chain, alice, bytes(chain.me), 200n, key)).toBe(0);
+  expect(await joinOn(chain, bob, bytes(chain.me), 200n, key)).toBe(1);
+  expect(await joinOn(chain, new Seat("Alice", alice.secret), bytes(chain.me), 200n, key)).toBe(0);
+});
+
+test("joining refuses a prefilled opening, unverified history, or a still mutable opening", async () => {
+  const key = () => Bun.file(`${import.meta.dir}/any.verifier`).bytes();
+  const chain = await LocalChain.deploy(key);
+  await joinOn(chain, new Seat("Alice"), bytes(chain.me));
+  // The expected keys also fit a state with an invented initial stack, without escrow.
+  const prefilled = (await chain.snapshot()).state!;
+  prefilled.balance = new Map();
+  const mutable = await chain.opening();
+  mutable.maintenanceAuthority = new L.ContractMaintenanceAuthority([], 0, 0n);
+  const applied = chain.applied;
+  for (const opened of [prefilled, mutable, null]) {
+    const source = {
+      network: chain.network,
+      address: chain.address,
+      snapshot: () => chain.snapshot(),
+      opening: async () => opened,
+      submit: (tx: L.UnprovenTransaction) => chain.submit(tx),
+    };
+    await expect(joinOn(source, new Seat("Bob"), bytes(chain.me), 200n, key)).rejects.toThrow("opening could not be verified");
+    expect(chain.applied).toBe(applied);
+  }
+});
+
+test("Live publishes every buy-in, including changes inside a serialized state", async () => {
+  const chain = await LocalChain.deploy(() => Bun.file(`${import.meta.dir}/any.verifier`).bytes());
+  const alice = new Seat("Alice", 1n);
+  await joinOn(chain, alice, bytes(chain.me), 80n);
+  const ref = new LiveReferee(chain, alice, { poll: 20 });
+  ref.start();
+  try {
+    await until(ref, (s) => s.seats[0]!.stack === 80);
+    for (let stack = 81; stack <= 84; stack++) {
+      const changed = until(ref, (s) => s.seats[0]!.stack === stack, 2000);
+      await chain.submit((await callOn(chain, await chain.snapshot(), alice, "buy_in", [0n, 1n])).tx);
+      expect((await changed).seats[0]!.stack).toBe(stack);
+    }
+  } finally {
+    ref.stop();
+  }
+});
+
+test("a surviving Live client expires and settles a missing lowest seat", async () => {
+  const chain = await LocalChain.deploy(verifierKey);
+  const alice = new Seat("Alice");
+  const bob = new Seat("Bob");
+  await joinOn(chain, alice, bytes(chain.me));
+  await joinOn(chain, bob, bytes(chain.me));
+  await chain.submit((await callOn(chain, await chain.snapshot(), alice, "start_deal", [])).tx);
+  const current = () => ledger(RuntimeContractState.deserialize(chain.ledgerState.index(chain.address)!.serialize()).data);
+  const ref = new LiveReferee(chain, bob, { poll: 20 });
+  ref.start();
+  try {
+    await until(ref, () => current().keys.member(1n));
+    // No Alice client exists to post the missing key or settle her own abort.
+    setSystemTime(new Date(Number(current().deadline + 1n) * 1000));
+    const settled = await until(ref, () => current().phase === Phase.done, 3000);
+    expect(current().seat_owner.member(0n)).toBe(false);
+    expect(current().stack[1]).toBe(401n);
+    expect(settled.seats[0]!.name).toBeNull();
+    expect(settled.message).toContain("Deal aborted");
+  } finally {
+    ref.stop();
+    setSystemTime();
+  }
+});
+
+test("Live folds at the displayed betting deadline before the bond can expire", async () => {
+  const chain = await LocalChain.deploy(verifierKey);
+  const alice = new Seat("Alice");
+  const bob = new Seat("Bob");
+  await joinOn(chain, alice, bytes(chain.me));
+  await joinOn(chain, bob, bytes(chain.me));
+  const a = new LiveReferee(chain, alice, { poll: 20, betweenDeals: 60_000 });
+  const b = new LiveReferee(chain, bob, { poll: 20, betweenDeals: 60_000 });
+  a.start();
+  b.start();
+  try {
+    const turn = await until(a, (s) => s.legal !== null && s.legal.call > 0);
+    setSystemTime(new Date(turn.deadline! * 1000));
+    const result = await until(b, (s) => s.street === "between" && s.message.includes("win"), 5000);
+    expect(result.seats[0]!.folded).toBe(true);
+    const l = ledger(RuntimeContractState.deserialize(chain.ledgerState.index(chain.address)!.serialize()).data);
+    expect(l.offender).toBe(255n);
+    expect(l.seat_owner.member(0n)).toBe(true);
+    expect(result.seats[0]!.stack + result.seats[1]!.stack).toBe(400);
+  } finally {
+    a.stop();
+    b.stop();
+    setSystemTime();
+  }
+}, 30_000);
+
+test("a seat sitting out does not prevent the remaining players starting", async () => {
+  const chain = await LocalChain.deploy(verifierKey);
+  const alice = new Seat("Alice");
+  const bob = new Seat("Bob");
+  const carol = new Seat("Carol");
+  for (const seat of [alice, bob, carol]) await joinOn(chain, seat, bytes(chain.me));
+  await chain.submit((await callOn(chain, await chain.snapshot(), alice, "stand_up", [0n, true])).tx);
+  const ref = new LiveReferee(chain, bob, { poll: 20 });
+  ref.start();
+  try {
+    await until(ref, () => ledger(RuntimeContractState.deserialize(chain.ledgerState.index(chain.address)!.serialize()).data).phase === Phase.keys, 2000);
+    const l = ledger(RuntimeContractState.deserialize(chain.ledgerState.index(chain.address)!.serialize()).data);
+    expect(l.in_deal).toEqual([false, true, true, false, false, false]);
+  } finally {
+    ref.stop();
+  }
+});
 
 test("two Live referees play a deal through the chain, each for its own seat only", async () => {
   const chain = await LocalChain.deploy(verifierKey);

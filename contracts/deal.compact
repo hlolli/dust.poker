@@ -1263,6 +1263,7 @@ export circuit expire(): [] {
       }
     }
   }
+  assert(offender != NONE(), "nobody owes a step");
   phase = Phase.aborted;
   deadline = 0;
   to_act = NONE();

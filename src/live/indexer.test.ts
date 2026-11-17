@@ -1,5 +1,32 @@
 import { expect, test } from "bun:test";
-import { type Change, watchContract } from "./indexer.ts";
+import { type Change, opening, watchContract } from "./indexer.ts";
+
+test("opening reads the final maintenance state, falling back only to a direct deploy", async () => {
+  let contract: { updates: { state: string }[]; deploys: { state: string }[] } | null = null;
+  let failure = false;
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const { query, variables } = await req.json() as { query: string; variables: { address: string } };
+      expect(variables.address).toBe("ab".repeat(32));
+      expect(query).toContain("updates: actions(limit: 1, type: UPDATE)");
+      expect(query).toContain("deploys: actions(limit: 1, type: DEPLOY)");
+      return Response.json(failure ? { errors: [{ message: "history unavailable" }] } : { data: { contract } });
+    },
+  });
+  try {
+    const read = () => opening(server.url.href, "ab".repeat(32));
+    expect(await read()).toBeNull();
+    contract = { updates: [], deploys: [{ state: "deployed" }] };
+    expect(await read()).toBe("deployed");
+    contract.updates = [{ state: "locked" }];
+    expect(await read()).toBe("locked");
+    failure = true;
+    await expect(read()).rejects.toThrow("history unavailable");
+  } finally {
+    server.stop(true);
+  }
+});
 
 // A stand-in indexer speaking graphql-transport-ws: it must be greeted, acknowledges, takes one
 // subscription, and is answered when it pings. Then it pushes two actions and completes; the

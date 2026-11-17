@@ -5,7 +5,7 @@ import { type CircuitResults, ContractState as RuntimeContractState, createCircu
 import * as L from "@midnightntwrk/ledger-v9";
 import type { Seat } from "../referee/contract.ts";
 import { type Arg, type Circuit, UNTIMED } from "../referee/rules.ts";
-import { snapshot as indexerSnapshot, watchContract } from "./indexer.ts";
+import { opening as indexerOpening, snapshot as indexerSnapshot, watchContract } from "./indexer.ts";
 import { bytes, callTx, hex, prove } from "./ledger.ts";
 import type { KeyMaterialProvider, Wallet } from "./wallet.ts";
 
@@ -21,6 +21,8 @@ export interface Chain {
   readonly network: string;
   readonly address: string;
   snapshot(): Promise<Snapshot>;
+  /** State at the last maintenance update (or deploy), used to authenticate the table's opening. */
+  opening?(): Promise<L.ContractState | null>;
   /** Proves (with whatever prover this player has), balances, signs and submits. */
   submit(tx: L.UnprovenTransaction): Promise<void>;
   /** Pushes a snapshot whenever the referee's state changes, when the chain can; returns the way to stop. */
@@ -85,6 +87,10 @@ export function walletChain(w: Wallet, address: string): Chain {
     async snapshot() {
       const snap = await indexerSnapshot(w.config.indexerUri, address);
       return { state: snap.state ? L.ContractState.deserialize(bytes(snap.state)) : null, time: snap.block.timestamp, params: L.LedgerParameters.deserialize(bytes(snap.block.ledgerParameters)) };
+    },
+    async opening() {
+      const state = await indexerOpening(w.config.indexerUri, address);
+      return state ? L.ContractState.deserialize(bytes(state)) : null;
     },
     submit: (tx) => submitThrough(w, tx),
     watch: (onChange) =>

@@ -293,6 +293,11 @@ test("showdown: three players check to the river, prove their hands, and the pot
   }
   await t.refuses(0, "show_hand", /already shown/, 0n);
 
+  // Everyone has fulfilled the showdown step. Even after the deadline, expiry must not
+  // strand the pot in an abort with no offender for settle_abort to evict.
+  t.now = Number(l.deadline) + 1;
+  await t.refuses(0, "expire", /nobody owes a step/);
+
   const before = l.stack.map(Number);
   const payouts = expectedPayouts(t);
   await t.call(1, "settle");

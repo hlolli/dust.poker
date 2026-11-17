@@ -5,7 +5,7 @@ import * as L from "@midnightntwrk/ledger-v9";
 import { ledger } from "../../contracts/build/deal/contract/index.js";
 import { keyMaterial, player } from "../../contracts/harness.ts";
 import { CIRCUITS } from "../referee/rules.ts";
-import { bytes, callTx, deployInParts, isOurs, hex, prove } from "./ledger.ts";
+import { bytes, callTx, deployInParts, deployTx, isOurs, hex, prove } from "./ledger.ts";
 
 // The first transactions, applied to a ledger state in memory as a node would: the referee is
 // deployed, then a player joins with a real unshielded input, the join proven with the wasm
@@ -42,6 +42,54 @@ function apply(state: L.LedgerState, tx: L.Transaction<L.SignatureEnabled, L.Pro
   if (result.type !== "success") throw new Error(`transaction ${result.type}: ${result.error}`);
   return next;
 }
+
+describe("table identity", () => {
+  // The identity checks need real key encoding, but no proving artifacts or prover.
+  async function table() {
+    const vk = await Bun.file(`${import.meta.dir}/any.verifier`).bytes();
+    const state = new L.ContractState();
+    state.maintenanceAuthority = new L.ContractMaintenanceAuthority([], 1, 0n);
+    for (const name of CIRCUITS) {
+      const op = new L.ContractOperation();
+      op.verifierKey = vk;
+      state.setOperation(name, op);
+    }
+    return { state, keys: async () => vk };
+  }
+
+  test("accepts the complete, immutable operation set", async () => {
+    const { state, keys } = await table();
+    expect(await isOurs(state, keys, CIRCUITS)).toBe(true);
+    expect(await isOurs(state, keys, [...CIRCUITS, "missing"])).toBe(false);
+    expect(await isOurs(state, async () => new Uint8Array(32), CIRCUITS)).toBe(false);
+  });
+
+  test("rejects additional entry points even when every expected key matches", async () => {
+    for (const name of ["drain", new Uint8Array([255])]) {
+      const { state, keys } = await table();
+      state.setOperation(name, state.operation("leave")!);
+      expect(await isOurs(state, keys, CIRCUITS)).toBe(false);
+    }
+  });
+
+  test("rejects an empty committee that allows unsigned maintenance", async () => {
+    const { state, keys } = await table();
+    state.maintenanceAuthority = new L.ContractMaintenanceAuthority([], 0, 0n);
+    const trusted = await isOurs(state, keys, CIRCUITS);
+    const { address, tx } = deployTx(NETWORK, state, ttl);
+    const insert = new L.VerifierKeyInsert("drain", new L.ContractOperationVersionedVerifierKey("v4", await keys()));
+    const update = L.Transaction.fromParts(NETWORK, undefined, undefined, L.Intent.new(ttl).addMaintenanceUpdate(new L.MaintenanceUpdate(address, [insert], 0n)));
+    let chain = L.LedgerState.blank(NETWORK);
+    for (const transaction of [tx, update]) {
+      const verified = transaction.eraseProofs().wellFormed(chain, strictness, now);
+      const [next, result] = chain.apply(verified, new L.TransactionContext(chain, block));
+      expect(result.type).toBe("success");
+      chain = next;
+    }
+    expect(chain.index(address)!.operation("drain")).toBeDefined();
+    expect(trusted).toBe(false);
+  });
+});
 
 describe("the referee on the ledger", () => {
   test.skipIf(!proverBuilt)("deploy, then join with a real unshielded input", async () => {

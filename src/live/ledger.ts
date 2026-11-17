@@ -89,11 +89,21 @@ export async function deployInParts(network: string, constructed: RuntimeContrac
 
 /** Whether a deployed table is ours: every circuit's verifier key is the one we built, and nobody can change them. */
 export async function isOurs(state: L.ContractState, keys: VerifierKeys, circuits: string[]): Promise<boolean> {
-  if (state.maintenanceAuthority.committee.length !== 0) return false;
+  const authority = state.maintenanceAuthority;
+  if (authority.committee.length !== 0 || authority.threshold === 0) return false;
+  if (state.operations().length !== circuits.length) return false;
   for (const name of circuits) {
     const op = state.operation(name);
-    const ours = await keys(name);
-    if (!op || op.verifierKey.length !== ours.length || op.verifierKey.some((b, i) => b !== ours[i])) return false;
+    if (!op) return false;
+    const key = await keys(name);
+    if (op.verifierKey.length !== key.length || op.verifierKey.some((b, i) => b !== key[i])) return false;
+    const expected = new L.ContractOperation();
+    expected.verifierKey = key;
+    // An operation can carry keys for more than one runtime version. Checking only the
+    // current verifierKey would also trust an additional, unrecognized legacy key.
+    const ours = expected.serialize();
+    const theirs = op.serialize();
+    if (theirs.length !== ours.length || theirs.some((b, i) => b !== ours[i])) return false;
   }
   return true;
 }

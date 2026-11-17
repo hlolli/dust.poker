@@ -1,7 +1,7 @@
 import { ContractState as RuntimeContractState } from "@midnight-ntwrk/compact-runtime";
 import { ledger, type Ledger } from "../../contracts/build/deal/contract/index.js";
 import type { Seat } from "../referee/contract.ts";
-import { actionStep, canShow, emptyTable, legal, occupied, outcome, owed, Phase, type Step, tableFrom } from "../referee/rules.ts";
+import { actionStep, canShow, CLOCK_SLACK, emptyTable, legal, occupied, outcome, owed, Phase, Prep, seatOf, type Step, tableFrom } from "../referee/rules.ts";
 import type { Action, Referee, TableState } from "../referee/types.ts";
 import { type Chain, callOn, type Snapshot } from "./chain.ts";
 
@@ -32,7 +32,7 @@ export class LiveReferee implements Referee {
   private readonly names: (string | null)[] = [null, null, null, null, null, null];
   private snap: Snapshot | null = null;
   private l: Ledger | null = null;
-  private seen = "";
+  private seen: Uint8Array | null = null;
   private lastDeal = -1n;
   private lastStreet = -1n;
   private lastAction: (string | null)[] = [null, null, null, null, null, null];
@@ -151,15 +151,14 @@ export class LiveReferee implements Referee {
     this.snap = snap;
     if (!snap.state) return;
     const raw = snap.state.serialize();
-    const key = String(raw.length) + ":" + Array.from(raw.subarray(0, 64)).join(",") + ":" + Array.from(raw.subarray(-64)).join(",");
+    const changed = !this.seen || raw.length !== this.seen.length || raw.some((b, i) => b !== this.seen![i]);
     const state = RuntimeContractState.deserialize(raw);
     const l = ledger(state.data);
-    const changed = key !== this.seen || this.l === null;
-    this.seen = key;
+    this.seen = raw;
     this.l = l;
     if (!changed) return;
     this.pending = null; // the chain moved: whatever was sent is either in or overtaken
-    for (const i of occupied(l)) this.names[i] ??= i === this.you ? this.seat.name : `Seat ${i + 1}`;
+    for (let i = 0; i < this.names.length; i++) this.names[i] = l.seat_owner.member(BigInt(i)) ? (i === this.you ? this.seat.name : `Seat ${i + 1}`) : null;
     if (l.deal_no !== this.lastDeal) {
       // A deal started since we last looked: keys rotate (prepared if it opened at the hole
       // cards), stacks before the blinds are stack plus what is in so far. On the first look
@@ -205,12 +204,30 @@ export class LiveReferee implements Referee {
       if (Date.now() - this.pending.at < this.retry) return; // wait for the chain to show it
       this.pending = null;
     }
+    if (seatOf(l, this.seat.secret) !== this.you) return; // this seat may have been evicted or taken again
     const [step] = owed(l, this.you);
+    // Once the last hand is proved, no player owes anything that could time out.
+    if (step?.circuit === "settle" || step?.circuit === "settle_abort") return void (await this.sendOnce(step));
+    // Recovery is permissionless. Use the observed block time for expiry, so a fast local
+    // clock cannot forfeit another player before the contract's deadline.
+    const over = l.phase === Phase.idle || l.phase === Phase.done;
+    if (l.phase >= Phase.keys && l.phase <= Phase.showdown && l.deadline !== 0n && BigInt(this.snap.time) >= l.deadline) {
+      return void (await this.sendOnce({ circuit: "expire", args: [] }));
+    }
+    if (over && (l.next_prep === Prep.keys || l.next_prep === Prep.shuffle) && BigInt(this.snap.time) >= l.next_deadline) {
+      return void (await this.sendOnce({ circuit: "expire_next", args: [] }));
+    }
+    // Leave enough of the contract's slack for the check/fold to prove and land.
+    if (l.phase === Phase.playing && Number(l.to_act) === this.you && Date.now() / 1000 >= Number(l.deadline) - CLOCK_SLACK) {
+      const { step, note } = actionStep(l, this.you, legal(l, this.you).check ? { type: "check" } : { type: "fold" });
+      this.lastAction[this.you] = note;
+      return void (await this.sendOnce(step));
+    }
     if (step) return void (await this.sendOnce(step));
     // Between deals: the lowest seat with chips starts the next one, after a pause.
-    const starter = occupied(l).find((i) => l.stack[i]! > 0n);
-    const over = l.phase === Phase.idle || l.phase === Phase.done;
-    if (over && starter === this.you && occupied(l).filter((i) => l.stack[i]! > 0n).length >= 2) {
+    const playing = occupied(l).filter((i) => l.stack[i]! > 0n && !l.leaving[i]);
+    const starter = playing[0];
+    if (over && starter === this.you && playing.length >= 2) {
       if (l.phase === Phase.idle || Date.now() - this.doneSince >= this.betweenDeals) await this.sendOnce({ circuit: "start_deal", args: [] });
     }
   }
@@ -245,7 +262,6 @@ export class LiveReferee implements Referee {
   }
 }
 
-/** Seconds a client should keep for a transaction to land, relative to the contract's deadline. */
 /** An error's message with its causes: a wallet wraps the node's answer two or three layers deep. */
 export function reason(e: unknown): string {
   const parts: string[] = [];

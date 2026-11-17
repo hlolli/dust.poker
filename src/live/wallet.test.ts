@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decodeAddress } from "./wallet.ts";
+import { connect, decodeAddress, type InitialAPI } from "./wallet.ts";
 
 // Vectors made with the bech32 reference library (bitcoinjs/bech32 2.0.0), the same encoding
 // @midnightntwrk/wallet-sdk-address-format produces: hrp mn_addr_<network>, 32 bytes, no length limit.
@@ -7,6 +7,19 @@ const bytes = "0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186"
 const preview = "mn_addr_preview1pvc9275lcn5suv6c0k3v0mq3xedcpfw2au2rjh5r4rxly9euvxrq6nhvej";
 const mainnet = "mn_addr1pvc9275lcn5suv6c0k3v0mq3xedcpfw2au2rjh5r4rxly9euvxrqpxawfc";
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+
+test("an unsupported network is refused before opening the wallet", async () => {
+  let connections = 0;
+  const wallet: InitialAPI = {
+    rdns: "test.wallet", name: "Test wallet", icon: "", apiVersion: "4.0.0",
+    async connect() {
+      connections++;
+      throw new Error("wallet opened");
+    },
+  };
+  for (const id of ["mainnet", "unknown"]) await expect(connect(wallet, id)).rejects.toThrow("unsupported Live network");
+  expect(connections).toBe(0);
+});
 
 describe("decodeAddress", () => {
   test("an unshielded address on a named network", () => {

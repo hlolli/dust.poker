@@ -55,11 +55,13 @@ export async function deployTable(w: Wallet, profile: Profile): Promise<string> 
 /** Joins the table on `chain` with `buy` chips; the chain's balancing adds buy plus bond of the
  *  table's asset. A player already seated there (a reload, another tab) takes their seat back
  *  without a transaction. With `keys`, refuses a table whose circuits are not the ones we built,
- *  or whose circuits someone could still change. Returns the seat. */
+ *  whose circuits someone could still change, or whose locked opening was not the empty
+ *  constructor state. Returns the seat. */
 export async function joinOn(chain: Chain, seat: Seat, payout: Uint8Array, buy = 200n, keys?: VerifierKeys): Promise<number> {
   const snap = await chain.snapshot();
   if (snap.state) {
     if (keys && !(await isOurs(snap.state, keys, CIRCUITS))) throw new Error("Not a dust.poker table: its circuits are not the ones this site plays, or they can still be changed.");
+    if (keys) await verifyOpening(chain, seat, keys);
     const held = seatOf(ledger(RuntimeContractState.deserialize(snap.state.serialize()).data), seat.secret);
     if (held >= 0) return (seat.index = held);
   }
@@ -70,6 +72,25 @@ export async function joinOn(chain: Chain, seat: Seat, payout: Uint8Array, buy =
   // same block would have taken the seat this one was computed for.
   await settled(chain, (s) => s !== null && seatOf(ledger(RuntimeContractState.deserialize(s.serialize()).data), seat.secret) === seat.index, "the join");
   return seat.index;
+}
+
+/** Verifier keys authenticate calls, not constructor data. Establish the empty, immutable
+ *  starting point so invented stacks or a substituted fresh deck cannot pass the join gate. */
+async function verifyOpening(chain: Chain, seat: Seat, keys: VerifierKeys): Promise<void> {
+  const opened = await chain.opening?.();
+  const expected = await seat.contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), ASSET());
+  // Normalize the data into otherwise empty ledger states; maintenance counters and keys
+  // differ during installation, and charged read/write accounting is not contract data.
+  const encoded = (state: L.StateValue) => {
+    const holder = new L.ContractState();
+    holder.data = new L.ChargedState(state);
+    return holder.serialize();
+  };
+  const data = encoded(L.StateValue.decode(expected.currentContractState.data.state.encode()));
+  const actual = opened && encoded(opened.data.state);
+  if (!opened || !actual || opened.balance.size !== 0 || actual.length !== data.length || actual.some((b, i) => b !== data[i]) || !(await isOurs(opened, keys, CIRCUITS))) {
+    throw new Error("Not a dust.poker table: its empty, immutable opening could not be verified.");
+  }
 }
 
 /** Joins the table at `address` through the wallet. Returns the chain to play on, your seat, and where its keys are kept. */

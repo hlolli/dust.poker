@@ -93,6 +93,23 @@ export async function snapshot(indexerUri: string, address: string): Promise<Sna
   return { block: seconds(data.block), state: data.contractAction?.state ?? null };
 }
 
+/** The last maintenance update, or the deploy when there were no updates. Once the
+ *  authority is locked this is the immutable starting point for validating a table. */
+export async function opening(indexerUri: string, address: string): Promise<string | null> {
+  const query = `query ($address: HexEncoded!) {
+    contract(address: $address) {
+      updates: actions(limit: 1, type: UPDATE) { state }
+      deploys: actions(limit: 1, type: DEPLOY) { state }
+    }
+  }`;
+  const res = await fetch(indexerUri, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query, variables: { address } }) });
+  if (!res.ok) throw new Error(`indexer ${res.status} ${res.statusText}`);
+  const { data, errors } = (await res.json()) as { data?: { contract: { updates: { state: string }[]; deploys: { state: string }[] } | null }; errors?: { message: string }[] };
+  if (errors?.length || !data) throw new Error(`indexer: ${errors?.map((e) => e.message).join("; ") ?? "no data"}`);
+  const contract = data.contract;
+  return contract?.updates[0]?.state ?? contract?.deploys[0]?.state ?? null;
+}
+
 /** The protocol the network runs, from its newest block: 1000300 is node 1.0.3 (ledger 8), 2001000 node 2.1.0 (ledger 9). */
 export async function protocolVersion(indexerUri: string): Promise<number> {
   const res = await fetch(indexerUri, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "{ block { protocolVersion } }" }) });

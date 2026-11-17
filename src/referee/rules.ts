@@ -76,8 +76,8 @@ export function canShow(l: Ledger, seat: number): boolean {
 
 /**
  * The mechanical steps a seat owes right now, none of them a decision: its key, its shuffle,
- * its shares and releases, tabling and proving its hand, settling (by the first seat still in,
- * or the first in the deal for an abort), and its part in preparing the next deck.
+ * its shares and releases, tabling and proving its hand, permissionless settlement,
+ * and its part in preparing the next deck.
  */
 export function owed(l: Ledger, seat: number): Step[] {
   const steps: Step[] = [];
@@ -110,10 +110,10 @@ export function owed(l: Ledger, seat: number): Step[] {
       break;
     case Phase.showdown:
       if (live.includes(seat) && !l.scores.member(s)) steps.push({ circuit: "show_hand", args: [s] });
-      else if (seat === live[0] && live.every((i) => l.scores.member(BigInt(i)))) steps.push({ circuit: "settle", args: [] });
+      else if (occupied(l).includes(seat) && live.every((i) => l.scores.member(BigInt(i)))) steps.push({ circuit: "settle", args: [] });
       break;
     case Phase.aborted:
-      if (seat === occupied(l)[0]) steps.push({ circuit: "settle_abort", args: [] });
+      if (occupied(l).includes(seat) && seat !== Number(l.offender)) steps.push({ circuit: "settle_abort", args: [] });
       break;
   }
   // The next deck, prepared alongside the deal, once this deal is under way.

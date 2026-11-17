@@ -24,6 +24,7 @@ export class LocalChain implements Chain {
     readonly address: string,
     private state: L.LedgerState,
     private readonly key: L.SigningKey,
+    private readonly opened: L.ContractState,
   ) {}
 
   /** The player's payout address: also where their Night sits. */
@@ -46,7 +47,11 @@ export class LocalChain implements Chain {
     const constructed = await new Seat("deployer").contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), bytes(L.nativeToken().raw));
     const { address, deploy, updates } = await deployInParts("undeployed", constructed.currentContractState, verifierKey, state.parameters, new Date(now.getTime() + 3_600_000));
     for (const tx of [deploy, ...updates]) state = applyTo(state, tx.eraseProofs(), now);
-    return new LocalChain(address, state, key);
+    return new LocalChain(address, state, key, state.index(address)!);
+  }
+
+  async opening(): Promise<L.ContractState> {
+    return L.ContractState.deserialize(this.opened.serialize());
   }
 
   async snapshot(): Promise<Snapshot> {

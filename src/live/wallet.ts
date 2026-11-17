@@ -72,6 +72,7 @@ export const installed = (): InitialAPI[] => Object.values(window.midnight ?? {}
 
 /** Connects, and checks the wallet is on the network asked for. */
 export async function connect(wallet: InitialAPI, networkId = network()): Promise<Wallet> {
+  if (!NETWORKS.includes(networkId)) throw new Error(`unsupported Live network: ${networkId}; choose ${NETWORKS.join(" or ")}`);
   const api = await wallet.connect(networkId);
   const [config, { unshieldedAddress }] = await Promise.all([api.getConfiguration(), api.getUnshieldedAddress()]);
   if (config.networkId !== networkId) throw new Error(`the wallet is on ${config.networkId}, not ${networkId}`);
