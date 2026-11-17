@@ -73,7 +73,9 @@ export function randomPermutation(): bigint[] {
   return p;
 }
 
-export function player(permutation: bigint[] = randomPermutation()) {
+/** A player who shuffles afresh each time, as the game's clients do, or always by `fixed` (to test a bad shuffle). */
+export function player(fixed?: bigint[]) {
+  const order = () => fixed ?? randomPermutation();
   const secret = randomScalar();
   const blinding = Array.from({ length: 52 }, randomScalar);
   // Two deck keys: this deal's and the one the next deck is being prepared with. They
@@ -84,8 +86,8 @@ export function player(permutation: bigint[] = randomPermutation()) {
     deck_key: (ctx) => [ctx.privateState, p.x],
     next_deck_key: (ctx) => [ctx.privateState, p.nextX],
     // The circuit takes the deck already in secret order; the permutation itself stays here.
-    permuted: (ctx) => [ctx.privateState, permutation.map((k) => ctx.ledger.deck[Number(k)]!)],
-    next_permuted: (ctx) => [ctx.privateState, permutation.map((k) => ctx.ledger.next_deck[Number(k)]!)],
+    permuted: (ctx) => [ctx.privateState, order().map((k) => ctx.ledger.deck[Number(k)]!)],
+    next_permuted: (ctx) => [ctx.privateState, order().map((k) => ctx.ledger.next_deck[Number(k)]!)],
     blinding: (ctx) => [ctx.privateState, blinding],
     // Showdown and settlement witnesses, computed from the ledger as a client would.
     best_five: (ctx) => [ctx.privateState, bestFive(ctx.ledger, p.seat, p.x)],
