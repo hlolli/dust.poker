@@ -10,7 +10,8 @@ import { bytes, hex, scriptWallet, seed } from "./wallet.ts";
 
 const { values } = parseArgs({ options: { seed: { type: "string", default: "2" }, port: { type: "string", default: "8790" } } });
 const wallet = await scriptWallet(`seed ${values.seed}`, seed(Number(values.seed)));
-const prover = await wallet.api.getProvingProvider({ getZKIR: async () => new Uint8Array(), getProverKey: async () => new Uint8Array(), getVerifierKey: async () => new Uint8Array() });
+const { keyMaterial } = await import("../src/live/chain.ts");
+const prover = await wallet.api.getProvingProvider(keyMaterial);
 const headers = { "access-control-allow-origin": "*", "access-control-allow-headers": "content-type", "content-type": "application/json" };
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers });
 const failing = (e: unknown) => json({ error: e instanceof Error ? e.message : String(e) });

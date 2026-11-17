@@ -4,8 +4,9 @@
 //
 //   bun run compact:build --zk && bun scripts/prove-deal.ts
 //
-// Needs .compact/prover (scripts/build-prover.sh) and the prover keys under contracts/build.
+// Uses the released ZKIR v3 prover and keys from compact:build --zk.
 import { parseArgs } from "node:util";
+import * as zkir from "@midnightntwrk/zkir-v3";
 import { CALL, CIRCUITS, type Circuit, keyMaterial, Phase, RAISE, seatsOf, Table } from "../contracts/harness.ts";
 
 const root = `${import.meta.dir}/..`;
@@ -75,7 +76,6 @@ console.log(`${preimages.size} circuits ran; proving ${wanted.length}`);
 
 // ---- Prove each one -----------------------------------------------------------------------
 
-const zkir = await import(`${root}/.compact/prover/zkir-wasm/midnight_zkir_wasm_fs.js`);
 const kmProvider = keyMaterial(root);
 
 let failed = 0;

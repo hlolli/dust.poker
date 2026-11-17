@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "config": {
-    "compactc": "0.34.0"
+    "compactc": "0.36.1"
   },
   "scripts": {
     "dev": "bun scripts/dev.ts",
@@ -12,18 +12,21 @@
     "typecheck": "tsc --noEmit",
     "compact:fetch": "bun scripts/fetch-compact.ts",
     "compact:build": "bun scripts/build-contracts.ts",
-    "prover:build": "scripts/build-prover.sh",
+    "prover:build": "bun scripts/prover.ts",
     "prover:build-native": "scripts/build-prover-native.sh",
     "bench:prove": "bun scripts/bench-prove.ts",
     "prove:deal": "bun scripts/prove-deal.ts",
+    "live:check": "bun local/table.ts",
     "check": "bun run compact:build && bun run typecheck && bun test && bun run build"
   },
   "dependencies": {
-    "@midnight-ntwrk/compact-runtime": "0.19.0",
+    "@midnight-ntwrk/compact-runtime": "0.21.0",
     "@midnightntwrk/ledger-v9": "1.0.2",
+    "@midnightntwrk/onchain-runtime-v4": "4.0.2",
     "three": "0.186.0"
   },
   "devDependencies": {
+    "@midnightntwrk/zkir-v3": "3.2.1",
     "@types/bun": "latest",
     "@types/three": "0.186.0",
     "typescript": "^5.9.0"

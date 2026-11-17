@@ -1,6 +1,6 @@
 // A Live table on the local network without Lace: two wallets driven from seeds open a table,
 // take two seats and play a deal, through the same code the site runs (src/live). Each step is
-// a real transaction: proven here with the wasm prover, balanced and signed by the wallet SDK,
+// a real transaction: proven by the local proof server, balanced and signed by the wallet SDK,
 // submitted to the node, read back through the indexer. The end-to-end check of the Live table.
 //
 //   bun local/table.ts                        # seeds 00..02 and 00..03, both genesis wallets
@@ -9,9 +9,14 @@
 //                                             # checking or folding, until stopped: an opponent
 //                                             # for a player in the browser (local/bridge.ts)
 //
-// Needs the stack from local/compose.yml and local/indexer.sh, the keys from
-// `bun run compact:build --zk`, and the wasm prover in .compact/prover.
+// Needs the stack from local/compose.yml and the keys from `bun run compact:build --zk`.
+// The default check plays every street to showdown and withdraws both stacks and bonds.
 import { parseArgs } from "node:util";
+import { strict as assert } from "node:assert";
+import { ContractState } from "@midnight-ntwrk/compact-runtime";
+import { ledger } from "../contracts/build/deal/contract/index.js";
+import { callOn } from "../src/live/chain.ts";
+import { Phase } from "../src/referee/rules.ts";
 import { config, root, scriptWallet, seed } from "./wallet.ts";
 
 const live = await import(`${root}/src/live/live.ts`);
@@ -32,12 +37,36 @@ const memoryStore = (): KeyStore => {
 const until = (ref: InstanceType<typeof LiveReferee>, ok: (s: TableState) => boolean, ms = 300_000) =>
   new Promise<TableState>((resolve, reject) => {
     let last: TableState | null = null;
+    let off = () => {};
+    let done = false;
     const timer = setTimeout(() => (off(), reject(new Error(`timed out: "${last?.message}", street ${last?.street}`))), ms);
-    const off = ref.subscribe((s: TableState) => {
+    off = ref.subscribe((s: TableState) => {
       last = s;
-      if (ok(s)) (clearTimeout(timer), off(), resolve(s));
+      if (ok(s)) (done = true, clearTimeout(timer), off(), resolve(s));
     });
+    if (done) off();
   });
+
+async function waitFor(ok: () => Promise<boolean>, what: string, ms = 180_000) {
+  const deadline = Date.now() + ms;
+  let last: unknown;
+  while (Date.now() < deadline) {
+    try { if (await ok()) return; } catch (e) { last = e; }
+    await Bun.sleep(2000);
+  }
+  throw new Error(`timed out waiting for ${what}`, { cause: last });
+}
+
+async function ready() {
+  await waitFor(async () => {
+    const response = await fetch("http://127.0.0.1:9944", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "midnight_ledgerVersion", params: [] }), signal: AbortSignal.timeout(5000) });
+    const version = await response.json() as { result?: string; error?: unknown };
+    assert.match(String(version.result), /ledger.?9/i);
+    const snap = await snapshot(config.indexerUri, "00".repeat(32));
+    const proof = await fetch("http://127.0.0.1:6300/health", { signal: AbortSignal.timeout(5000) });
+    return snap.block.height > 1 && proof.ok;
+  }, "Ledger 9 node, indexer, and proof server");
+}
 
 /** One wallet at an existing table, playing along for as long as the process runs. */
 async function sit(address: string, n: number) {
@@ -65,10 +94,12 @@ async function sit(address: string, n: number) {
 
 async function main() {
   const { values } = parseArgs({ options: { table: { type: "string" }, sit: { type: "string" } } });
+  await ready();
   if (values.sit) return sit(values.table!, Number(values.sit));
   const [seedA, seedB] = [seed(2), seed(3)];
   const [alice, bob] = await Promise.all([scriptWallet("Alice", seedA, (l) => console.log(`  ${l}`)), scriptWallet("Bob", seedB, (l) => console.log(`  ${l}`))]);
   console.log(`Alice ${alice.address}\nBob   ${bob.address}`);
+  const initialNight = (await alice.nightBalance()) + (await bob.nightBalance());
   const pa = profile("Alice", seedA);
   const pb = profile("Bob", seedB);
 
@@ -93,30 +124,74 @@ async function main() {
   const jb = await live.joinTable(bob, pb, address);
   console.log(`  seat ${jb.seat.index}`);
 
-  console.log("the deal: keys, shuffles, shares, then whoever is to act folds");
-  const a = new LiveReferee(ja.chain, ja.seat, { betweenDeals: 1000, store: memoryStore() });
-  const b = new LiveReferee(jb.chain, jb.seat, { betweenDeals: 1000, store: memoryStore() });
+  console.log("the deal: keys, shuffles, shares, every street, showdown, then withdrawal");
+  const a = new LiveReferee(ja.chain, ja.seat, { betweenDeals: 3_600_000, store: memoryStore() });
+  const b = new LiveReferee(jb.chain, jb.seat, { betweenDeals: 3_600_000, store: memoryStore() });
+  const streets = new Set<string>();
+  const actionErrors: unknown[] = [];
   // Every change of message, for the log: what each referee is doing or failing at.
   for (const [who, ref] of [["Alice", a], ["Bob", b]] as const) {
     let last = "";
+    let latest: TableState;
+    let acting = false;
+    const drive = async () => {
+      if (acting || !latest.legal) return;
+      acting = true;
+      try {
+        await ref.act(latest.legal.check ? { type: "check" } : { type: "call" });
+      } catch (error) {
+        actionErrors.push(error);
+      } finally {
+        acting = false;
+        if (latest.legal && actionErrors.length === 0) queueMicrotask(() => void drive());
+      }
+    };
     ref.subscribe((s: TableState) => {
+      latest = s;
+      streets.add(s.street);
       if (s.message !== last) console.log(`  [${who}] ${s.message || "(playing)"}`);
       last = s.message;
+      void drive();
     });
   }
   a.start();
   b.start();
   try {
-    const [sa, sb] = await Promise.all([until(a, (s) => s.street === "preflop" && s.toAct !== null), until(b, (s) => s.street === "preflop" && s.toAct !== null)]);
-    console.log(`  Alice holds ${JSON.stringify(sa.seats[ja.seat.index]!.hole)}, Bob holds ${JSON.stringify(sb.seats[jb.seat.index]!.hole)}, seat ${sa.toAct} to act`);
-    const actor = sa.toAct === ja.seat.index ? a : b;
-    await actor.act({ type: "fold" });
-    const done = await until(a, (s) => s.street === "between" && s.message.includes("win"));
+    const finished = (s: TableState) => s.street === "between" && s.seats.some((seat) => seat.isWinner);
+    const [done] = await Promise.all([until(a, finished, 900_000), until(b, finished, 900_000)]);
     console.log(`  ${done.message}; stacks ${done.seats.filter((s) => s.name).map((s) => `${s.name} ${s.stack}`).join(", ")}`);
+    assert.equal(actionErrors.length, 0, `betting failed: ${actionErrors.map(String).join("; ")}`);
+    for (const street of ["preflop", "flop", "turn", "river", "showdown"]) assert(streets.has(street), `did not reach ${street}`);
+    assert.equal(done.board.length, 5);
+    assert.equal(done.seats.reduce((n, seat) => n + seat.stack, 0), 400);
+    const end = await ja.chain.snapshot();
+    const l = ledger(ContractState.deserialize(end.state!.serialize()).data);
+    assert.equal(l.phase, Phase.done);
+    assert.equal(l.scores.size(), 2n);
+    assert.equal([...end.state!.balance.values()].reduce((a, b) => a + b, 0n), 800n);
   } finally {
     a.stop();
     b.stop();
   }
+
+  for (const joined of [ja, jb]) {
+    for (const circuit of ["stand_up", "leave"] as const) {
+      const before = await joined.chain.snapshot();
+      const args = circuit === "stand_up" ? [BigInt(joined.seat.index), true] : [BigInt(joined.seat.index)];
+      const { tx } = await callOn(joined.chain, before, joined.seat, circuit, args);
+      await joined.chain.submit(tx);
+      await waitFor(async () => {
+        const next = await joined.chain.snapshot();
+        const l = ledger(ContractState.deserialize(next.state!.serialize()).data);
+        return circuit === "stand_up" ? l.leaving[joined.seat.index]! : !l.seat_owner.member(BigInt(joined.seat.index));
+      }, circuit);
+    }
+  }
+  const emptied = await ja.chain.snapshot();
+  assert.equal([...emptied.state!.balance.values()].reduce((a, b) => a + b, 0n), 0n);
+  await waitFor(async () => (await alice.nightBalance()) + (await bob.nightBalance()) === initialNight, "both stacks and bonds to return to the wallets");
+  console.log("Ledger 9 end-to-end passed: deployed, dealt every street, settled, withdrew; Night conserved, fees paid in DUST.");
+  await Promise.all([alice.close(), bob.close()]);
 }
 
 main().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });

@@ -1,6 +1,6 @@
 # The proof gate: every circuit of the referee proves with Midnight's wasm prover, on the
-# real keys. Slow (the prover is built with nix on a cache miss, and the shuffle proofs take
-# minutes on a runner), so it guards master rather than every pull request; ci.yml is the
+# real keys. Shuffle proofs take minutes on a runner, so it guards master rather than every
+# pull request; ci.yml is the
 # fast check. Run by hand with workflow_dispatch.
 name: prove
 on:
@@ -19,19 +19,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.13
-      - uses: DeterminateSystems/nix-installer-action@main
       - run: bun install --frozen-lockfile
-      # The prover (wasm), the key generator and the KZG parameters, built from the pinned
-      # midnight-zkir revision; kept between runs.
+      # The released wasm prover comes from bun.lock; Compact carries its matching key generator.
       - uses: actions/cache@v4
-        id: prover
         with:
-          path: .compact/prover
-          key: prover-${{ hashFiles('scripts/build-prover.sh') }}
-      - if: steps.prover.outputs.cache-hit != 'true'
-        run: bun run prover:build
+          path: .compact/prover/params
+          key: midnight-kzg-params-v1
       - run: bun run compact:build --zk
-      # The ledger test: deploy and join applied to a ledger state in memory, the join proven
-      # on the real keys; skipped by ci.yml, which has no prover.
+      # Deployment, deposits and withdrawal applied with real proofs and signatures.
+      # ci.yml skips this test because it does not generate keys.
       - run: bun test src/live/ledger.test.ts
       - run: bun run prove:deal

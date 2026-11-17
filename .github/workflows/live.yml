@@ -1,0 +1,34 @@
+name: live
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+concurrency:
+  group: live-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ledger9:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: local
+      - uses: actions/cache@v4
+        with:
+          path: .compact/prover/params
+          key: midnight-kzg-params-v1
+      - run: docker compose -f local/compose.yml up -d --wait --wait-timeout 180
+      - run: bun run compact:build --zk
+      - run: bun run typecheck
+        working-directory: local
+      - run: bun run live:check
+        timeout-minutes: 25
+      - if: always()
+        run: docker compose -f local/compose.yml logs --no-color --tail 500
+      - if: always()
+        run: docker compose -f local/compose.yml down

@@ -1,24 +1,20 @@
 // Compiles every contracts/*.compact into contracts/build/<name>/ with the pinned compactc.
-// Always emits ZKIR v3, the format the wasm prover (midnight-zkir 3.x) consumes.
+// Compact 0.36 emits ZKIR v3, the format the released @midnightntwrk/zkir-v3 consumes.
 //
-// Pass --zk to also generate prover and verifier keys. Keys are made by the `zkir` built
-// from the same source as the wasm prover (scripts/build-prover.sh), not by the zkir-v3
-// binary bundled with compactc: same version string, different key file format.
+// Pass --zk to generate matching prover and verifier keys with the bundled zkir-v3.
 import { $ } from "bun";
+import { jsonIrToBinary, Zkir } from "@midnightntwrk/zkir-v3";
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import pkg from "../package.json";
 import { compileContract } from "./compactc.ts";
+import { getParams, paramsDir } from "./prover.ts";
 
 const root = `${import.meta.dir}/..`;
 const compactc = `${root}/.compact/${pkg.config.compactc}/compactc`;
-const prover = `${root}/.compact/prover`;
+const keygen = `${root}/.compact/${pkg.config.compactc}/zkir-v3`;
 const zk = process.argv.includes("--zk");
 
 await $`bun ${root}/scripts/fetch-compact.ts`.quiet();
-if (zk && !existsSync(`${prover}/bin/zkir`)) {
-  console.error(`--zk needs ${prover}/bin/zkir; run scripts/build-prover.sh first`);
-  process.exit(1);
-}
 
 const sources = readdirSync(`${root}/contracts`).filter((f) => f.endsWith(".compact"));
 for (const f of sources) {
@@ -40,9 +36,15 @@ for (const f of sources) {
   } finally {
     if (keep) renameSync(stash, `${out}/keys`);
   }
+  // --skip-zk emits JSON only. Wallets need binary IR even when a plain rebuild kept the keys.
+  for (const file of readdirSync(`${out}/zkir`).filter((f) => f.endsWith(".zkir"))) {
+    writeFileSync(`${out}/zkir/${file.replace(/\.zkir$/, ".bzkir")}`, jsonIrToBinary(readFileSync(`${out}/zkir/${file}`, "utf8")));
+  }
   if (zk) {
-    console.log(`zkir compile-many -> contracts/build/${name}/keys`);
-    await $`${prover}/bin/zkir compile-many ${out}/zkir ${out}/keys`.env({ ...process.env, MIDNIGHT_PP: `${prover}/params` });
+    const sizes = new Set(readdirSync(`${out}/zkir`).filter((f) => f.endsWith(".zkir")).map((f) => Zkir.fromJson(readFileSync(`${out}/zkir/${f}`, "utf8")).getK()));
+    for (const k of sizes) await getParams(k);
+    console.log(`zkir-v3 compile-many -> contracts/build/${name}/keys`);
+    await $`${keygen} compile-many ${out}/zkir ${out}/keys`.env({ ...process.env, MIDNIGHT_PP: paramsDir });
     writeFileSync(`${out}/keys/.zkir-hash`, zkirHash(out));
   } else if (existsSync(`${out}/keys`) && (!existsSync(`${out}/keys/.zkir-hash`) || readFileSync(`${out}/keys/.zkir-hash`, "utf8").trim() !== zkirHash(out))) {
     // Stale keys prove nothing: the prover reports an unsatisfied constraint system, hours later, on a chain.
@@ -53,6 +55,6 @@ for (const f of sources) {
 /** One hash over every circuit's IR: what the keys were made from. */
 function zkirHash(out: string): string {
   const h = new Bun.CryptoHasher("sha256");
-  for (const f of readdirSync(`${out}/zkir`).sort()) h.update(readFileSync(`${out}/zkir/${f}`));
+  for (const f of readdirSync(`${out}/zkir`).filter((f) => f.endsWith(".zkir")).sort()) h.update(readFileSync(`${out}/zkir/${f}`));
   return h.digest("hex");
 }

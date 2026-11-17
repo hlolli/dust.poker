@@ -1,4 +1,6 @@
 import { createCircuitContext, createConstructorContext, dummyContractAddress, proofDataIntoSerializedPreimage } from "@midnight-ntwrk/compact-runtime";
+import { jsonIrToBinary } from "@midnightntwrk/zkir-v3";
+import { getParams } from "../scripts/prover.ts";
 import { Contract, ledger } from "./build/deal/contract/index.js";
 import { bestFive, forfeitSplit, PRACTICE_ASSET, prepForfeitSplit, shownCards, splits } from "./client.ts";
 
@@ -38,22 +40,13 @@ export function keyMaterial(root: string, contract = "deal") {
   const read = (p: string) => Bun.file(p).bytes();
   return {
     async lookupKey(keyLocation: string) {
-      const { jsonIrToBinary } = await import(`${root}/.compact/prover/zkir-wasm/midnight_zkir_wasm_fs.js`);
       return {
         proverKey: await read(`${root}/contracts/build/${contract}/keys/${keyLocation}.prover`),
         verifierKey: await read(`${root}/contracts/build/${contract}/keys/${keyLocation}.verifier`),
         ir: jsonIrToBinary(await Bun.file(`${root}/contracts/build/${contract}/zkir/${keyLocation}.zkir`).text()) as Uint8Array,
       };
     },
-    async getParams(k: number) {
-      const file = `${root}/.compact/prover/params/bls_midnight_2p${k}`;
-      if (!(await Bun.file(file).exists())) {
-        const res = await fetch(`https://midnight-s3-fileshare-dev-eu-west-1.s3.eu-west-1.amazonaws.com/bls_midnight_2p${k}`);
-        if (!res.ok) throw new Error(`params k=${k}: ${res.status}`);
-        await Bun.write(file, await res.arrayBuffer());
-      }
-      return read(file);
-    },
+    getParams: (k: number) => getParams(k, `${root}/.compact/prover/params`),
   };
 }
 
@@ -129,7 +122,7 @@ export class Table {
   /** Circuits that take the clock get it appended. */
   async call(seat: number, circuit: Circuit, ...args: Arg[]): Promise<unknown> {
     const p = this.players[seat]!;
-    const ctx = createCircuitContext(circuit, address, coinPublicKey, this.state, {} as PS, undefined, undefined, undefined, this.now);
+    const ctx = createCircuitContext<PS>({ circuitId: circuit, contractAddress: address, coinPublicKeyOrZswapState: coinPublicKey, contractState: this.state, privateState: {}, time: this.now });
     const all = UNTIMED.has(circuit) ? args : [...args, BigInt(this.now)];
     const r = await (p.contract.circuits[circuit] as (c: typeof ctx, ...a: Arg[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);
     this.state = r.context.callContext.currentQueryContext.state;

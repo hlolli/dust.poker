@@ -26,7 +26,7 @@ export async function compileContract(compiler: string, source: string, out: str
     writeFileSync(binary, bytes, { mode: 0o700 });
     // The two path changes invalidate the release's ad-hoc Mach-O signature.
     if (process.platform === "darwin") await $`/usr/bin/codesign --force --sign - ${binary}`.quiet();
-    await $`${binary} --feature-zkir-v3 --skip-zk ${resolve(source)} ${resolve(out)}`
+    await $`${binary} --skip-zk ${resolve(source)} ${resolve(out)}`
       .cwd(temporary)
       .env({ ...process.env, PATH: `${toolchain}:${process.env.PATH ?? ""}` });
   } finally {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { ContractState as RuntimeContractState, createCircuitContext, createConstructorContext } from "@midnight-ntwrk/compact-runtime";
 import * as L from "@midnightntwrk/ledger-v9";
+import * as zkir from "@midnightntwrk/zkir-v3";
 import { ledger } from "../../contracts/build/deal/contract/index.js";
 import { keyMaterial, player } from "../../contracts/harness.ts";
 import { CIRCUITS } from "../referee/rules.ts";
@@ -12,18 +13,17 @@ import { bytes, callTx, deployInParts, deployTx, isOurs, hex, prove } from "./le
 // prover and verified by the ledger. What the wallet does for a Live table (adding the input
 // and the fee, signing) is done here by hand with a test key.
 //
-// Needs the wasm prover and the keys (prover:build, compact:build --zk), like the proof gate;
+// Needs the keys (compact:build --zk), like the proof gate;
 // without them (the plain CI workflow) it is skipped, and prove.yml runs it.
 
 const root = `${import.meta.dir}/../..`;
-const proverBuilt = existsSync(`${root}/.compact/prover/zkir-wasm/midnight_zkir_wasm_fs.js`) && existsSync(`${root}/contracts/build/deal/keys/join.prover`);
+const proverBuilt = existsSync(`${root}/contracts/build/deal/keys/join.prover`);
 const NETWORK = "undeployed";
 const SECONDS = 1_700_000_000;
 const now = new Date(SECONDS * 1000);
 const ttl = new Date((SECONDS + 3600) * 1000);
 const coinPublicKey = "11".repeat(32);
-const zkir = proverBuilt ? await import(`${root}/.compact/prover/zkir-wasm/midnight_zkir_wasm_fs.js`) : null;
-const prover: L.ProvingProvider = zkir?.provingProvider(keyMaterial(root));
+const prover: L.ProvingProvider = zkir.provingProvider(keyMaterial(root));
 const keys = keyMaterial(root);
 const verifierKey = async (circuit: string) => (await keys.lookupKey(circuit)).verifierKey;
 
@@ -92,7 +92,7 @@ describe("table identity", () => {
 });
 
 describe("the referee on the ledger", () => {
-  test.skipIf(!proverBuilt)("deploy, then join with a real unshielded input", async () => {
+  test.skipIf(!proverBuilt)("Ledger 9 deploy, join, buy-in, and withdrawal conserve the player's Night", async () => {
     // A player with Night to bring to the table: rewarded, then claimed into a UTXO.
     const signingKey = L.sampleSigningKey();
     const verifyingKey = L.signatureVerifyingKey(signingKey);
@@ -128,20 +128,20 @@ describe("the referee on the ledger", () => {
 
     // Join: run the circuit against the deployed state, then wrap the run into a transaction.
     const runtimeState = RuntimeContractState.deserialize(deployed.serialize());
-    const ctx = createCircuitContext("join", address, coinPublicKey, runtimeState, {}, undefined, undefined, undefined, SECONDS);
-    const run = await p.contract.circuits.join(ctx, bytes(me), 200n);
+    const ctx = createCircuitContext({ circuitId: "join", contractAddress: address, coinPublicKeyOrZswapState: coinPublicKey, contractState: runtimeState, privateState: {}, time: SECONDS });
+    const run = await p.contract.circuits.join(ctx, bytes(me), 100n);
     expect(run.result).toBe(0n); // seat 0
     let tx = callTx(NETWORK, run, deployed, state.parameters, ttl);
 
     // Unbalanced by the buy-in and the bond the contract receives, in the call's segment (1, the
     // intent's fallible part: the ledger put the receive there, so a failed call still pays its fee)...
     const unshielded = (segment: number) => [...tx.imbalances(segment).entries()].find(([t]) => t.tag === "unshielded")?.[1] ?? 0n;
-    expect(unshielded(1)).toBe(-400n);
+    expect(unshielded(1)).toBe(-300n);
     // ...which the player's UTXO covers, with change back. (The wallet's job on a Live table.)
     const intent = tx.intents!.get(1)!;
     intent.fallibleUnshieldedOffer = L.UnshieldedOffer.new(
       [{ value: funds!.value, owner: verifyingKey, type: funds!.type, intentHash: funds!.intentHash, outputNo: funds!.outputNo }],
-      [{ value: funds!.value - 400n, owner: me, type: funds!.type }],
+      [{ value: funds!.value - 300n, owner: me, type: funds!.type }],
       [],
     );
     tx.intents = new Map([[1, intent]]);
@@ -159,9 +159,46 @@ describe("the referee on the ledger", () => {
     // The seat is taken, the escrow holds the buy-in and the bond, the player has the change.
     const after = ledger(RuntimeContractState.deserialize(state.index(address)!.serialize()).data);
     expect(after.seat_owner.member(0n)).toBe(true);
-    expect(after.stack[0]).toBe(200n);
-    expect([...state.index(address)!.balance.values()]).toEqual([400n]);
-    expect([...state.utxo.filter(me)].map((u) => u.value)).toEqual([NIGHT - 400n]);
+    expect(after.stack[0]).toBe(100n);
+    expect([...state.index(address)!.balance.values()]).toEqual([300n]);
+    expect([...state.utxo.filter(me)].map((u) => u.value)).toEqual([NIGHT - 300n]);
     expect(hex(bytes(me))).toBe(me);
+
+    // A further buy-in uses the current wallet UTXO; leaving must create a real payout,
+    // including the bond, that the stable ledger accepts and the wallet can spend again.
+    const call = async (circuit: "buy_in" | "stand_up" | "leave", ...args: (bigint | boolean)[]) => {
+      const current = state.index(address)!;
+      const context = createCircuitContext({ circuitId: circuit, contractAddress: address, coinPublicKeyOrZswapState: coinPublicKey, contractState: RuntimeContractState.deserialize(current.serialize()), privateState: {}, time: SECONDS });
+      const result = await (p.contract.circuits[circuit] as (c: typeof context, ...a: (bigint | boolean)[]) => Promise<import("@midnight-ntwrk/compact-runtime").CircuitResults>)(context, ...args);
+      let transaction = callTx(NETWORK, result, current, state.parameters, ttl);
+      if (circuit === "buy_in") {
+        const [coin] = state.utxo.filter(me);
+        const intent = transaction.intents!.get(1)!;
+        intent.fallibleUnshieldedOffer = L.UnshieldedOffer.new(
+          [{ value: coin!.value, owner: verifyingKey, type: coin!.type, intentHash: coin!.intentHash, outputNo: coin!.outputNo }],
+          [{ value: coin!.value - 100n, owner: me, type: coin!.type }],
+          [],
+        );
+        transaction.intents = new Map([[1, intent]]);
+      }
+      for (const segment of [0, 1]) {
+        expect([...transaction.imbalances(segment)].filter(([type]) => type.tag === "unshielded").every(([, value]) => value === 0n)).toBe(true);
+      }
+      const proven = await prove(transaction, prover);
+      if (circuit === "buy_in") {
+        const intent = proven.intents!.get(1)!;
+        intent.fallibleUnshieldedOffer = intent.fallibleUnshieldedOffer!.addSignatures([new L.SignatureEnabled(L.signData(signingKey, intent.signatureData(1)))]);
+        proven.intents = new Map([[1, intent]]);
+      }
+      state = apply(state, proven.bind());
+    };
+    await call("buy_in", 0n, 100n);
+    expect([...state.index(address)!.balance.values()]).toEqual([400n]);
+    expect(ledger(RuntimeContractState.deserialize(state.index(address)!.serialize()).data).stack[0]).toBe(200n);
+    await call("stand_up", 0n, true);
+    await call("leave", 0n);
+    expect(ledger(RuntimeContractState.deserialize(state.index(address)!.serialize()).data).seat_owner.member(0n)).toBe(false);
+    expect([...state.index(address)!.balance.values()].reduce((a, b) => a + b, 0n)).toBe(0n);
+    expect([...state.utxo.filter(me)].reduce((a, coin) => a + coin.value, 0n)).toBe(NIGHT);
   }, 120_000);
 });

@@ -23,7 +23,7 @@ export interface ContractOptions {
 }
 
 type PS = Record<string, never>;
-type State = Parameters<typeof createCircuitContext>[3];
+type State = Parameters<typeof createCircuitContext>[0]["contractState"];
 const ORDER = 6554484396890773809930967563523245729705921265872317281365359162392183254199n;
 const coinPublicKey = "11".repeat(32);
 const address = dummyContractAddress();
@@ -126,7 +126,7 @@ export class ContractReferee implements Referee {
     // Everyone joins in turn; the contract hands out the seats.
     for (const [i, p] of this.players.entries()) {
       // join is called on this player's contract by their own (not yet seated) index.
-      const ctx = createCircuitContext("join", address, coinPublicKey, this.state!, {} as PS);
+      const ctx = createCircuitContext<PS>({ circuitId: "join", contractAddress: address, coinPublicKeyOrZswapState: coinPublicKey, contractState: this.state!, privateState: {} });
       const r = await p.contract.circuits.join(ctx, p.address, BigInt(MAX_BUY_IN));
       this.state = r.context.callContext.currentQueryContext.state;
       p.index = Number(r.result);
@@ -173,7 +173,7 @@ export class ContractReferee implements Referee {
 
   private async call(seat: number, circuit: Circuit, ...args: Arg[]): Promise<unknown> {
     const now = Math.floor(Date.now() / 1000);
-    const ctx = createCircuitContext(circuit, address, coinPublicKey, this.state!, {} as PS, undefined, undefined, undefined, now);
+    const ctx = createCircuitContext<PS>({ circuitId: circuit, contractAddress: address, coinPublicKeyOrZswapState: coinPublicKey, contractState: this.state!, privateState: {}, time: now });
     const all = UNTIMED.has(circuit) ? args : [...args, BigInt(now)];
     const contract = this.seats[seat]!.contract;
     const r = await (contract.circuits[circuit] as (c: typeof ctx, ...a: Arg[]) => Promise<{ context: typeof ctx; result: unknown }>)(ctx, ...all);

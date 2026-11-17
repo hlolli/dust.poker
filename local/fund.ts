@@ -1,6 +1,6 @@
 // Funds a wallet on the local network (local/compose.yml) from the genesis wallet, which holds
 // the chain's Night. Registers the genesis wallet's Night for DUST first if it has none, since
-// fees are paid in DUST. The ledger-9 wallet SDK (beta) does the wallet work; this only drives it.
+// fees are paid in DUST. The released Ledger 9 wallet SDK does the wallet work; this only drives it.
 //
 //   bun local/fund.ts <mn_addr_undeployed1...>        50 Night to that address (or --night N)
 //   bun local/fund.ts --address <seed hex>            the unshielded address a seed derives to

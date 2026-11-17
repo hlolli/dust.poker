@@ -1,9 +1,9 @@
 // Proves the dealing circuits with Midnight's wasm prover and reports the time.
 //
-//   scripts/build-prover.sh && bun run compact:build --zk && bun scripts/bench-prove.ts
+//   bun run compact:build --zk && bun scripts/bench-prove.ts
 //
-// Defaults point at .compact/prover (from build-prover.sh) and contracts/build/deal (from
-// compact:build --zk); override with --zkir-wasm, --keys, --zkir, --params, --circuits.
+// Uses the released prover and contracts/build/deal (from compact:build --zk);
+// override with --zkir-wasm, --keys, --zkir, --params, --circuits.
 // KZG parameters missing from the params dir are fetched from Midnight's public bucket.
 import { parseArgs } from "node:util";
 import { existsSync } from "node:fs";
@@ -20,7 +20,7 @@ import { bestFive, forfeitSplit, PRACTICE_ASSET, splits } from "../contracts/cli
 const root = `${import.meta.dir}/..`;
 const { values: args } = parseArgs({
   options: {
-    "zkir-wasm": { type: "string", default: `${root}/.compact/prover/zkir-wasm` },
+    "zkir-wasm": { type: "string" },
     keys: { type: "string", default: `${root}/contracts/build/deal/keys` },
     zkir: { type: "string", default: `${root}/contracts/build/deal/zkir` },
     params: { type: "string", default: `${root}/.compact/prover/params` },
@@ -43,7 +43,7 @@ type PS = Record<string, never>;
 let zkir: any;
 if (args.native) {
   // The native binary reads the IR itself; only the k lookup below needs the wasm package.
-  zkir = await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`);
+  zkir = args["zkir-wasm"] ? await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`) : await import("@midnightntwrk/zkir-v3");
 } else if (args.threads) {
   // wasm-bindgen `--target web` package: explicit init with the wasm bytes, then the rayon pool.
   zkir = await import(`${args.mt}/index.js`);
@@ -51,7 +51,7 @@ if (args.native) {
   await zkir.initThreadPool(Number(args.threads));
   console.log(`threaded prover, ${args.threads} threads`);
 } else {
-  zkir = await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`);
+  zkir = args["zkir-wasm"] ? await import(`${args["zkir-wasm"]}/midnight_zkir_wasm_fs.js`) : await import("@midnightntwrk/zkir-v3");
 }
 
 const kmProvider = {
@@ -119,11 +119,11 @@ const addr = (seat: number) => new Uint8Array(32).fill(seat + 1);
 
 // Run the circuits locally to get the proof preimages, in the order a deal takes them;
 // player A's calls are the ones proved.
-let state: Parameters<typeof createCircuitContext>[3] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
+let state: Parameters<typeof createCircuitContext>[0]["contractState"] = (await a.initialState(createConstructorContext<PS>({}, coinPublicKey), PRACTICE_ASSET)).currentContractState;
 const preimages = new Map<string, Uint8Array>();
 type Arg = bigint | bigint[] | Uint8Array;
 async function run(contract: Contract<PS>, circuit: "join" | "start_deal" | "post_key" | "shuffle" | "shares" | "act" | "act_out" | "release" | "show_hand" | "settle", ...z: Arg[]) {
-  const ctx = createCircuitContext(circuit, address, coinPublicKey, state, {} as PS, undefined, undefined, undefined, now);
+  const ctx = createCircuitContext<PS>({ circuitId: circuit, contractAddress: address, coinPublicKeyOrZswapState: coinPublicKey, contractState: state, privateState: {}, time: now });
   const r = await (contract.circuits[circuit] as (c: typeof ctx, ...y: Arg[]) => Promise<any>)(ctx, ...z);
   state = r.context.callContext.currentQueryContext.state;
   // The root circuit's proof data is the last entry of the call trace (depth-first order).

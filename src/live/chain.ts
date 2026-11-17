@@ -42,7 +42,7 @@ const HOUR = 3_600_000;
 export async function callOn(chain: Chain, snap: Snapshot, seat: Seat, circuit: Circuit, args: Arg[]): Promise<{ tx: L.UnprovenTransaction; result: unknown }> {
   if (!snap.state) throw new Error(`no table at ${chain.address.slice(0, 12)}...`);
   const now = UNTIMED.has(circuit) ? snap.time : Math.max(snap.time, Math.floor(Date.now() / 1000) - 5);
-  const ctx = createCircuitContext(circuit, chain.address, COIN_PUBLIC_KEY, RuntimeContractState.deserialize(snap.state.serialize()), {}, undefined, undefined, undefined, now);
+  const ctx = createCircuitContext({ circuitId: circuit, contractAddress: chain.address, coinPublicKeyOrZswapState: COIN_PUBLIC_KEY, contractState: RuntimeContractState.deserialize(snap.state.serialize()), privateState: {}, time: now });
   const all = UNTIMED.has(circuit) ? args : [...args, BigInt(now)];
   const run = await (seat.contract.circuits[circuit] as (c: typeof ctx, ...a: Arg[]) => Promise<CircuitResults>)(ctx, ...all);
   return { tx: callTx(chain.network, run, snap.state, snap.params, new Date(Date.now() + HOUR)), result: run.result };
@@ -57,8 +57,8 @@ const fetchBytes = async (path: string) => {
   return new Uint8Array(await res.arrayBuffer());
 };
 export const keyMaterial: KeyMaterialProvider = {
-  // The IR as compactc emits it (ZKIR v3, JSON); the prover encodes it for itself.
-  getZKIR: (c) => fetchBytes(`zkir/${c}.zkir`),
+  // The released prover and proof server consume the tagged binary ZKIR v3 representation.
+  getZKIR: (c) => fetchBytes(`zkir/${c}.bzkir`),
   getProverKey: (c) => fetchBytes(`keys/${c}.prover`),
   getVerifierKey: (c) => fetchBytes(`keys/${c}.verifier`),
 };

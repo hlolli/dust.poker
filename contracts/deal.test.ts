@@ -553,7 +553,7 @@ test("the caller's clock must agree with the chain", async () => {
   const chain = t.now;
   const at = (claimed: number) => {
     t.now = claimed;
-    const ctx = createCircuitContext("start_deal", address, coinPublicKey, t.state, {} as PS, undefined, undefined, undefined, chain);
+    const ctx = createCircuitContext<PS>({ circuitId: "start_deal", contractAddress: address, coinPublicKeyOrZswapState: coinPublicKey, contractState: t.state, privateState: {}, time: chain });
     return t.players[0]!.contract.circuits.start_deal(ctx, BigInt(claimed));
   };
   await expect(at(chain + 1)).rejects.toThrow(/clock ahead/);
