@@ -7,6 +7,7 @@
 import { $ } from "bun";
 import { existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import pkg from "../package.json";
+import { compileContract } from "./compactc.ts";
 
 const root = `${import.meta.dir}/..`;
 const compactc = `${root}/.compact/${pkg.config.compactc}/compactc`;
@@ -35,7 +36,7 @@ for (const f of sources) {
   const keep = !zk && existsSync(`${out}/keys`);
   if (keep) renameSync(`${out}/keys`, stash);
   try {
-    await $`${compactc} --feature-zkir-v3 --skip-zk ${root}/contracts/${f} ${out}`;
+    await compileContract(compactc, `${root}/contracts/${f}`, out);
   } finally {
     if (keep) renameSync(stash, `${out}/keys`);
   }
