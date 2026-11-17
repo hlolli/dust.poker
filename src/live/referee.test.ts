@@ -10,7 +10,7 @@ import { bytes } from "./ledger.ts";
 import { joinOn } from "./live.ts";
 import { LocalChain } from "./local.ts";
 import { type KeyStore, LiveReferee } from "./referee.ts";
-import { callOn } from "./chain.ts";
+import { callOn, type Chain } from "./chain.ts";
 import { Phase } from "../referee/rules.ts";
 
 // Two players, each with their own Live referee, play a deal against a chain in memory: every
@@ -162,6 +162,79 @@ test("a seat sitting out does not prevent the remaining players starting", async
     await until(ref, () => ledger(RuntimeContractState.deserialize(chain.ledgerState.index(chain.address)!.serialize()).data).phase === Phase.keys, 2000);
     const l = ledger(RuntimeContractState.deserialize(chain.ledgerState.index(chain.address)!.serialize()).data);
     expect(l.in_deal).toEqual([false, true, true, false, false, false]);
+  } finally {
+    ref.stop();
+  }
+});
+
+test("a confirmed key collision is retried against the other player's updated state", async () => {
+  const chain = await LocalChain.deploy(verifierKey);
+  const alice = new Seat("Alice");
+  const bob = new Seat("Bob");
+  await joinOn(chain, alice, bytes(chain.me));
+  await joinOn(chain, bob, bytes(chain.me));
+  await chain.submit((await callOn(chain, await chain.snapshot(), alice, "start_deal", [])).tx);
+
+  await Bun.sleep(0); // drain setup notifications before either client begins watching
+  // Both clients build their first key post against the same snapshot. A wallet confirms
+  // inclusion even when the call's fallible segment fails; LocalChain normally throws it.
+  const first: { tx: L.UnprovenTransaction; resolve(): void; reject(e: unknown): void }[] = [];
+  let collisions = 0;
+  const included = async (tx: L.UnprovenTransaction) => {
+    try { await chain.submit(tx); } catch (e) {
+      if (!(e instanceof Error) || !e.message.startsWith("transaction partialSuccess")) throw e;
+      collisions++;
+    }
+  };
+  const source: Chain = {
+    network: chain.network, address: chain.address,
+    snapshot: () => chain.snapshot(), watch: (fn) => chain.watch(fn),
+    submit(tx) {
+      if (first.length >= 2) return included(tx);
+      return new Promise<void>((resolve, reject) => {
+        first.push({ tx, resolve, reject });
+        if (first.length === 2) void (async () => {
+          for (const pending of first) {
+            try { await included(pending.tx); pending.resolve(); } catch (e) { pending.reject(e); }
+          }
+        })();
+      });
+    },
+  };
+  const a = new LiveReferee(source, alice, { poll: 10, retry: 60_000 });
+  const b = new LiveReferee(source, bob, { poll: 10, retry: 60_000 });
+  a.start();
+  b.start();
+  try {
+    await Promise.all([until(a, (s) => s.street === "preflop", 20_000), until(b, (s) => s.street === "preflop", 20_000)]);
+    expect(collisions).toBeGreaterThan(0);
+  } finally {
+    a.stop();
+    b.stop();
+  }
+}, 30_000);
+
+test("a confirmed call that leaves the contract unchanged is not repeatedly submitted", async () => {
+  const chain = await LocalChain.deploy(verifierKey);
+  const alice = new Seat("Alice");
+  await joinOn(chain, alice, bytes(chain.me));
+  await joinOn(chain, new Seat("Bob"), bytes(chain.me));
+  await chain.submit((await callOn(chain, await chain.snapshot(), alice, "start_deal", [])).tx);
+  let attempts = 0;
+  let reads = 0;
+  const submitted = Promise.withResolvers<void>();
+  const source: Chain = {
+    network: chain.network, address: chain.address,
+    snapshot: () => { reads++; return chain.snapshot(); },
+    submit: async () => { attempts++; submitted.resolve(); }, // inclusion succeeded; the fallible call did not
+  };
+  const ref = new LiveReferee(source, alice, { poll: 10, retry: 60_000 });
+  ref.start();
+  try {
+    await submitted.promise;
+    await Bun.sleep(100);
+    expect(reads).toBeGreaterThan(2);
+    expect(attempts).toBe(1);
   } finally {
     ref.stop();
   }

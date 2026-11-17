@@ -42,7 +42,8 @@ const until = (ref: InstanceType<typeof LiveReferee>, ok: (s: TableState) => boo
     const timer = setTimeout(() => (off(), reject(new Error(`timed out: "${last?.message}", street ${last?.street}`))), ms);
     off = ref.subscribe((s: TableState) => {
       last = s;
-      if (ok(s)) (done = true, clearTimeout(timer), off(), resolve(s));
+      if (s.message.startsWith("Deal aborted")) (done = true, clearTimeout(timer), off(), reject(new Error(s.message)));
+      else if (ok(s)) (done = true, clearTimeout(timer), off(), resolve(s));
     });
     if (done) off();
   });

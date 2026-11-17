@@ -1,4 +1,5 @@
 import { ContractState as RuntimeContractState } from "@midnight-ntwrk/compact-runtime";
+import { ChargedState, ContractState } from "@midnightntwrk/ledger-v9";
 import { ledger, type Ledger } from "../../contracts/build/deal/contract/index.js";
 import type { Seat } from "../referee/contract.ts";
 import { actionStep, canShow, CLOCK_SLACK, emptyTable, legal, occupied, outcome, owed, Phase, Prep, seatOf, type Step, tableFrom } from "../referee/rules.ts";
@@ -33,6 +34,7 @@ export class LiveReferee implements Referee {
   private snap: Snapshot | null = null;
   private l: Ledger | null = null;
   private seen: Uint8Array | null = null;
+  private revision = 0;
   private lastDeal = -1n;
   private lastStreet = -1n;
   private lastAction: (string | null)[] = [null, null, null, null, null, null];
@@ -150,13 +152,18 @@ export class LiveReferee implements Referee {
   private read(snap: Snapshot) {
     this.snap = snap;
     if (!snap.state) return;
-    const raw = snap.state.serialize();
+    const state = RuntimeContractState.deserialize(snap.state.serialize());
+    // Ledger bookkeeping can change after a failed call. Only changed contract data
+    // makes a stale transcript worth rebuilding before the normal retry interval.
+    const data = new ContractState();
+    data.data = new ChargedState(snap.state.data.state);
+    const raw = data.serialize();
     const changed = !this.seen || raw.length !== this.seen.length || raw.some((b, i) => b !== this.seen![i]);
-    const state = RuntimeContractState.deserialize(raw);
     const l = ledger(state.data);
-    this.seen = raw;
     this.l = l;
     if (!changed) return;
+    this.seen = raw;
+    this.revision++;
     this.pending = null; // the chain moved: whatever was sent is either in or overtaken
     for (let i = 0; i < this.names.length; i++) this.names[i] = l.seat_owner.member(BigInt(i)) ? (i === this.you ? this.seat.name : `Seat ${i + 1}`) : null;
     if (l.deal_no !== this.lastDeal) {
@@ -242,10 +249,9 @@ export class LiveReferee implements Referee {
     await this.send(step);
   }
 
-  /** What a step is for: the circuit and its arguments in this deal, phase and turn. */
+  /** A failed fallible call can be retried as soon as another player changes its inputs. */
   private situation(step: Step): string {
-    const l = this.l!;
-    return `${step.circuit}:${step.args.map(String).join(",")}:${l.deal_no}:${l.phase}:${l.turn}:${l.to_act}:${l.shuffles_done}`;
+    return `${this.revision}:${step.circuit}:${step.args.map(String).join(",")}`;
   }
 
   private publish() {

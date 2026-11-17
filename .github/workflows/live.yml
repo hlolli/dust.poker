@@ -29,6 +29,6 @@ jobs:
       - run: bun run live:check
         timeout-minutes: 25
       - if: always()
-        run: docker compose -f local/compose.yml logs --no-color --tail 500
+        run: docker compose -f local/compose.yml logs --no-color
       - if: always()
         run: docker compose -f local/compose.yml down
