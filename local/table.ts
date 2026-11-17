@@ -61,7 +61,9 @@ async function ready() {
   await waitFor(async () => {
     const response = await fetch("http://127.0.0.1:9944", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "midnight_ledgerVersion", params: [] }), signal: AbortSignal.timeout(5000) });
     const version = await response.json() as { result?: string; error?: unknown };
-    assert.match(String(version.result), /ledger.?9/i);
+    // This RPC reports the Rust crate version (1.0.x for Ledger 9), not the ledger generation.
+    // scriptWallet checks the active protocol version after syncing with this node.
+    assert.equal(typeof version.result, "string", `ledger version RPC failed: ${JSON.stringify(version.error)}`);
     const snap = await snapshot(config.indexerUri, "00".repeat(32));
     const proof = await fetch("http://127.0.0.1:6300/health", { signal: AbortSignal.timeout(5000) });
     return snap.block.height > 1 && proof.ok;
