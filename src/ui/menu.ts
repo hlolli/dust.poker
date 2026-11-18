@@ -1,4 +1,4 @@
-import { setFor } from "../scene/lounge.ts";
+import { setFor } from "../scene/lounge-score.ts";
 import type { Chain } from "../live/chain.ts";
 import type { KeyStore } from "../live/referee.ts";
 import type { Seat } from "../referee/contract.ts";
@@ -74,7 +74,8 @@ export function showMenu(): Promise<Entry> {
     const tonight = () => {
       const set = setFor(new Date().getUTCHours());
       const band = ["bass", set.ride && "brushes", set.piano && "piano", set.vibes && "vibes"].filter(Boolean).join(", ");
-      const feel = set.tempo < 80 ? "a ballad" : set.tempo < 100 ? "medium swing" : "uptempo";
+      const feel = set.feel === "swing" ? (set.tempo < 100 ? "medium swing" : "uptempo swing")
+        : { ballad: "a ballad", bossa: "bossa nova", blues: "twelve-bar blues" }[set.feel];
       bandstand.textContent = `On the bandstand this hour: set ${set.hour + 1} of 24, ${feel} in ${KEYS[set.key]}, ${set.tempo} to the minute, ${band}.`;
     };
     tonight();

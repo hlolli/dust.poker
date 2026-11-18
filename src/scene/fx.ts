@@ -48,7 +48,7 @@ export function lightTable(renderer: THREE.WebGLRenderer, scene: THREE.Scene, ca
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap; // three 0.186 dropped the soft variant; the radius below blurs instead
   // The card-room lamp: a warm spot from above the table, tight enough for a crisp map.
-  const lamp = new THREE.SpotLight(0xffe0b0, 220, 9, 0.62, 0.55, 1.6);
+  const lamp = new THREE.SpotLight(0xffe7c6, 100, 9, 0.62, 0.65, 2);
   lamp.position.set(0, 4.2, 0);
   lamp.target.position.set(0, 0.75, 0);
   lamp.castShadow = true;
@@ -66,10 +66,13 @@ export type Fx = { render(): void; setSize(width: number, height: number): void 
 
 /** The post-processing chain: the scene, ambient occlusion, then tone mapping and colour space. */
 export function postprocessing(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera): Fx {
-  const size = renderer.getSize(new THREE.Vector2()).multiplyScalar(renderer.getPixelRatio());
+  const size = renderer.getSize(new THREE.Vector2());
   // Multisampled target: the composer would otherwise lose the canvas's antialiasing.
   const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, target);
+  // An explicit target gives the composer its logical size. Let it apply the device
+  // pixel ratio once, both to the buffers here and to passes added below.
+  composer.setSize(size.x, size.y);
   composer.addPass(new RenderPass(scene, camera));
   const gtao = new GTAOPass(scene, camera, size.x, size.y);
   gtao.output = GTAOPass.OUTPUT.Default;
@@ -93,7 +96,19 @@ export function postprocessing(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   composer.addPass(gtao);
   composer.addPass(new OutputPass());
   return {
-    render: () => composer.render(),
+    render() {
+      // The colour and normals passes see the same lamp and casters. Refresh its
+      // shadow map on the first render only, then hand control back for XR frames.
+      const shadow = renderer.shadowMap;
+      const autoUpdate = shadow.autoUpdate;
+      shadow.needsUpdate ||= autoUpdate;
+      shadow.autoUpdate = false;
+      try {
+        composer.render();
+      } finally {
+        shadow.autoUpdate = autoUpdate;
+      }
+    },
     setSize: (w, h) => composer.setSize(w, h),
   };
 }

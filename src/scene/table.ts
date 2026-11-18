@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { darkWood, felt } from "./materials.ts";
+import { brass, darkWood, felt, railLeather } from "./materials.ts";
 
 export const SEAT_COUNT = 6;
 export const TABLE_RADIUS = 1.1;
@@ -39,10 +39,24 @@ export function createTable(): THREE.Group {
   top.position.y = 0.75;
   g.add(top);
 
-  const rail = new THREE.Mesh(new THREE.TorusGeometry(RAIL_RADIUS, 0.08, 16, 96), wood);
+  // Wrap the grain to scale around the whole rail. A single trip around the torus
+  // is much longer than a trip around its padded cross-section.
+  const cushion = new THREE.TorusGeometry(RAIL_RADIUS, 0.08, 16, 96);
+  const uv = cushion.getAttribute("uv");
+  for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * 14);
+  const rail = new THREE.Mesh(cushion, railLeather());
   rail.rotation.x = Math.PI / 2;
-  rail.position.y = RAIL_TOP - 0.08;
+  rail.scale.z = 0.72;
+  rail.position.y = RAIL_TOP - 0.08 * rail.scale.z;
   g.add(rail);
+
+  const apron = new THREE.Mesh(new THREE.CylinderGeometry(RAIL_RADIUS + 0.025, RAIL_RADIUS, 0.09, 96), wood);
+  apron.position.y = 0.707;
+  g.add(apron);
+  const beading = new THREE.Mesh(new THREE.TorusGeometry(RAIL_RADIUS + 0.006, 0.004, 8, 96), brass());
+  beading.rotation.x = Math.PI / 2;
+  beading.position.y = 0.679;
+  g.add(beading);
 
   const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 0.72, 24), wood);
   pedestal.position.y = 0.36;

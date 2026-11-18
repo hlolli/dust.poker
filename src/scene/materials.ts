@@ -75,7 +75,7 @@ const sets = {
 export const marbleBlack = (repeat = 6) => pbr(sets.marbleBlack, repeat, { color: 0x4a4a4a, roughness: 0.32 }); // polished, but the chandelier must not blow out on it
 /** Veined white marble: columns and the sign panel. */
 export const marbleWhite = (repeat = 1) => pbr(sets.marbleWhite, repeat, { roughness: 0.35 });
-/** Dark polished wood: wainscot, table rail, bar. */
+/** Dark polished wood: wainscot, table apron, bar. */
 export const darkWood = (repeat = 2) => pbr(sets.wood, repeat, { color: 0x6b4a2b, roughness: 0.45 });
 /**
  * Baize, the table's cloth: the fabric set as cloth reflects, which is hardly at all but for a
@@ -99,6 +99,61 @@ export function felt(color: number, repeat = 4): THREE.MeshPhysicalMaterial {
 export const velvet = (color = 0x0f3d2e, repeat = 3) => pbr(sets.fabric, repeat, { color, roughness: 0.9 });
 /** Red leather: chairs. */
 export const leather = (repeat = 1) => pbr(sets.leather, repeat, { color: 0x8a1c1c, roughness: 0.55 });
+/**
+ * Cells around jittered points on a grid that wraps, so the texture tiles: for every pixel the
+ * nearest point and how far it is from the second nearest, which is zero on a cell border.
+ */
+export function cells(w: number, h: number, cols: number, rows: number, rnd: () => number) {
+  const pts: [number, number][] = [];
+  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) pts.push([((c + 0.15 + rnd() * 0.7) / cols) * w, ((r + 0.15 + rnd() * 0.7) / rows) * h]);
+  const owner = new Int32Array(w * h);
+  const edge = new Float32Array(w * h);
+  const cw = w / cols;
+  const ch = h / rows;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let best = Infinity;
+      let second = Infinity;
+      let who = 0;
+      const gc = Math.floor(x / cw);
+      const gr = Math.floor(y / ch);
+      for (let dr = -2; dr <= 2; dr++) {
+        for (let dc = -2; dc <= 2; dc++) {
+          const c = (gc + dc + cols) % cols;
+          const r = (gr + dr + rows) % rows;
+          const [px, py] = pts[r * cols + c]!;
+          // Nearest copy of the point across the wrap.
+          const dx = x - px - Math.round((x - px) / w) * w;
+          const dy = y - py - Math.round((y - py) / h) * h;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < best) [second, best, who] = [best, d, r * cols + c];
+          else if (d < second) second = d;
+        }
+      }
+      owner[y * w + x] = who;
+      edge[y * w + x] = second - best;
+    }
+  }
+  return { owner, edge, count: pts.length };
+}
+
+/** Fine, irregular pebbling in the hide stretched over the elbow rail. */
+export function railLeather(): THREE.MeshStandardMaterial {
+  const size = 128;
+  let seed = 79;
+  const random = () => (seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 4294967296;
+  const { edge } = cells(size, size, 20, 20, random);
+  const heights = Uint8Array.from(edge, (d) => 100 + 125 * THREE.MathUtils.smoothstep(d, 0, 1.2) + 24 * random());
+  const grain = new THREE.DataTexture(heights, size, size, THREE.RedFormat);
+  grain.wrapS = grain.wrapT = THREE.RepeatWrapping;
+  grain.generateMipmaps = true;
+  grain.minFilter = THREE.LinearMipmapLinearFilter;
+  grain.magFilter = THREE.LinearFilter;
+  grain.repeat.set(4, 4);
+  grain.anisotropy = 8;
+  grain.needsUpdate = true;
+  return new THREE.MeshStandardMaterial({ color: 0x482521, roughness: 0.54, bumpMap: grain, bumpScale: 0.65 });
+}
 /** Brass: the smooth metal set tinted gold, fully metallic. */
 export const brass = (repeat = 1) => pbr(sets.metal, repeat, { color: 0xd4a34a, metalness: 1, roughness: 0.3 });
 /** Chrome: the same metal untinted and polished; mirrors and 50s trim. */

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { brass, carpet, chrome, darkWood, marbleBlack, plaster, stone, velvet } from "./materials.ts";
+import { brass, carpet, cells, chrome, darkWood, marbleBlack, plaster, stone, velvet } from "./materials.ts";
 
 // The card room of a grand hotel, two eras welded together: Gaudi's organic structure
 // (tree columns that branch into the vault, parabolic arches, round skylights of coloured
@@ -11,6 +11,7 @@ export const ROOM = { width: 14, depth: 20, height: 8 };
 const BAY = 4; // column spacing along the hall
 const ARCADE_X = 5.5; // columns stand this far from the centre line
 const SPRING = 4.2; // trunks end and branches begin at this height
+const SCONCE_HEIGHT = 2.72;
 
 /** A parabolic arch rib in the XY plane, apex at (0, rise), feet at (+-halfSpan, 0). */
 function parabolicRib(halfSpan: number, rise: number, tube: number, material: THREE.Material): THREE.Mesh {
@@ -34,45 +35,6 @@ function strut(from: THREE.Vector3, to: THREE.Vector3, radius: number, material:
 /** A seeded random in [0, 1): the same room on every visit. */
 function seeded(seed: number): () => number {
   return () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 4294967296);
-}
-
-/**
- * Cells around jittered points on a grid that wraps, so the texture tiles: for every pixel the
- * nearest point and how far it is from the second nearest, which is zero on a cell border.
- * What both the glass (lead between panes) and the trencadis (grout between shards) are cut from.
- */
-function cells(w: number, h: number, cols: number, rows: number, rnd: () => number) {
-  const pts: [number, number][] = [];
-  for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) pts.push([((c + 0.15 + rnd() * 0.7) / cols) * w, ((r + 0.15 + rnd() * 0.7) / rows) * h]);
-  const owner = new Int32Array(w * h);
-  const edge = new Float32Array(w * h);
-  const cw = w / cols;
-  const ch = h / rows;
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      let best = Infinity;
-      let second = Infinity;
-      let who = 0;
-      const gc = Math.floor(x / cw);
-      const gr = Math.floor(y / ch);
-      for (let dr = -2; dr <= 2; dr++) {
-        for (let dc = -2; dc <= 2; dc++) {
-          const c = (gc + dc + cols) % cols;
-          const r = (gr + dr + rows) % rows;
-          const [px, py] = pts[r * cols + c]!;
-          // Nearest copy of the point across the wrap.
-          const dx = x - px - Math.round((x - px) / w) * w;
-          const dy = y - py - Math.round((y - py) / h) * h;
-          const d = Math.sqrt(dx * dx + dy * dy);
-          if (d < best) [second, best, who] = [best, d, r * cols + c];
-          else if (d < second) second = d;
-        }
-      }
-      owner[y * w + x] = who;
-      edge[y * w + x] = second - best;
-    }
-  }
-  return { owner, edge, count: pts.length };
 }
 
 /** Paints cells into a canvas texture: a colour per cell, a line of `lineColor` `lineWidth` px wide between them. */
@@ -127,6 +89,41 @@ function glassTexture(): THREE.CanvasTexture {
   return cellTexture(256, 512, 7, 13, 3, weighted(palette, 0.35), [10, 10, 12], 2.2, 0.45);
 }
 
+/** Warm spill above each brass sconce. The wall and fixtures are fixed, so sample the
+ * irradiance once in wall coordinates instead of evaluating 18 lights on every surface. */
+function sconceWall(length: number, bulbs: number[]): THREE.MeshStandardMaterial {
+  const height = ROOM.height;
+  const widthPx = Math.ceil(length * 16);
+  const heightPx = height * 16;
+  const pixels = new Uint8Array(widthPx * heightPx * 4);
+  for (let y = 0; y < heightPx; y++) {
+    const dy = (y + 0.5) / heightPx * height - SCONCE_HEIGHT;
+    // The cup blocks light below its rim.
+    const upward = THREE.MathUtils.smoothstep(dy, -0.35, 0.25);
+    for (let x = 0; x < widthPx; x++) {
+      const metres = ((x + 0.5) / widthPx - 0.5) * length;
+      let spill = 0;
+      for (const bulb of bulbs) {
+        const d2 = (metres - bulb) ** 2 + dy ** 2 + 0.4 ** 2;
+        spill += 0.4 / (d2 * Math.sqrt(d2));
+      }
+      const value = Math.min(1, spill * upward * 0.38);
+      const offset = 4 * (y * widthPx + x);
+      pixels[offset] = Math.round(value * 255);
+      pixels[offset + 1] = Math.round(value * 147);
+      pixels[offset + 2] = Math.round(value * 64);
+      pixels[offset + 3] = 255;
+    }
+  }
+  const map = new THREE.DataTexture(pixels, widthPx, heightPx);
+  map.magFilter = map.minFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  const wall = plaster(6);
+  wall.lightMap = map;
+  wall.lightMapIntensity = 4;
+  return wall;
+}
+
 export function createRoom(): THREE.Group {
   const g = new THREE.Group();
   g.name = "room";
@@ -142,7 +139,7 @@ export function createRoom(): THREE.Group {
   windowGlass.offset.set(0.5, 0.42);
   const windowGlassMat = new THREE.MeshBasicMaterial({ map: windowGlass, color: 0x6a6f86, side: THREE.DoubleSide });
   const bulbMat = new THREE.MeshStandardMaterial({ color: 0xfff1d0, emissive: 0xffc46b, emissiveIntensity: 2.4 });
-  const bulbGeometry = new THREE.SphereGeometry(0.045, 10, 8);
+  const bulbGeometry = new THREE.SphereGeometry(0.045, 8, 6);
 
   // Floor: black marble, a trencadis ring, the red rug under the table.
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(w, d), marbleBlack(7));
@@ -157,20 +154,28 @@ export function createRoom(): THREE.Group {
   rug.rotation.x = -Math.PI / 2;
   rug.position.y = 0.005;
   g.add(rug);
+  floor.receiveShadow = mosaic.receiveShadow = rug.receiveShadow = true;
 
   // Walls as four planes (no box, so nothing shares a plane with the floor or ceiling),
   // dark wood to shoulder height, plaster above, a chrome line between them.
-  const wallMat = plaster(6);
+  const endBulbs = [-4.5, -1.5, 1.5, 4.5];
+  const sideBulbs = [-8, -4, 0, 4, 8];
+  const endWall = sconceWall(w, endBulbs);
+  const sideWall = sconceWall(d, sideBulbs);
   const wainscotMat = darkWood(4);
   const chromeMat = chrome();
-  const sides: [THREE.Vector3, number, number][] = [
-    [new THREE.Vector3(0, 0, -d / 2), 0, w],
-    [new THREE.Vector3(0, 0, d / 2), Math.PI, w],
-    [new THREE.Vector3(-w / 2, 0, 0), Math.PI / 2, d],
-    [new THREE.Vector3(w / 2, 0, 0), -Math.PI / 2, d],
+  const cup = new THREE.SphereGeometry(0.15, 16, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+  const sconceBulb = new THREE.SphereGeometry(0.07, 12, 8);
+  const pilaster = new THREE.BoxGeometry(0.5, SPRING - 1.4, 0.08);
+  const placement = new THREE.Matrix4();
+  const sides: [THREE.Vector3, number, number, THREE.Material, number[]][] = [
+    [new THREE.Vector3(0, 0, -d / 2), 0, w, endWall, endBulbs],
+    [new THREE.Vector3(0, 0, d / 2), Math.PI, w, endWall, endBulbs],
+    [new THREE.Vector3(-w / 2, 0, 0), Math.PI / 2, d, sideWall, sideBulbs],
+    [new THREE.Vector3(w / 2, 0, 0), -Math.PI / 2, d, sideWall, sideBulbs],
   ];
-  for (const [pos, ry, len] of sides) {
-    const wall = new THREE.Mesh(new THREE.PlaneGeometry(len, h), wallMat);
+  for (const [pos, ry, len, wallMaterial, bulbOffsets] of sides) {
+    const wall = new THREE.Mesh(new THREE.PlaneGeometry(len, h), wallMaterial);
     wall.position.copy(pos).setY(h / 2);
     wall.rotation.y = ry;
     g.add(wall);
@@ -191,32 +196,21 @@ export function createRoom(): THREE.Group {
     cornice.position.copy(pos).setY(h - 0.08).add(new THREE.Vector3(0, 0, 0.08).applyAxisAngle(new THREE.Vector3(0, 1, 0), ry));
     cornice.rotation.y = ry;
     g.add(cornice);
-  }
 
-  // Wall sconces: a brass cup with a glowing bulb on a dark wood pilaster, spaced along every wall.
-  const cup = new THREE.SphereGeometry(0.15, 16, 8, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
-  const sconceBulb = new THREE.SphereGeometry(0.07, 12, 8);
-  const pilaster = new THREE.BoxGeometry(0.5, SPRING - 1.4, 0.08);
-  const sconce = (pos: THREE.Vector3, ry: number) => {
-    const inward = new THREE.Vector3(0, 0, 0.16).applyAxisAngle(new THREE.Vector3(0, 1, 0), ry);
-    const p = new THREE.Mesh(pilaster, wainscotMat);
-    p.position.copy(pos).setY((SPRING + 1.4) / 2).add(inward.clone().multiplyScalar(0.25));
-    p.rotation.y = ry;
-    g.add(p);
-    const c = new THREE.Mesh(cup, brassMat);
-    c.position.copy(pos).setY(2.6).add(inward);
-    g.add(c);
-    const b = new THREE.Mesh(sconceBulb, bulbMat);
-    b.position.copy(pos).setY(2.72).add(inward);
-    g.add(b);
-  };
-  for (let z = -8; z <= 8; z += 4) {
-    sconce(new THREE.Vector3(-w / 2, 0, z), Math.PI / 2);
-    sconce(new THREE.Vector3(w / 2, 0, z), -Math.PI / 2);
-  }
-  for (const x of [-4.5, -1.5, 1.5, 4.5]) {
-    sconce(new THREE.Vector3(x, 0, -d / 2), 0);
-    sconce(new THREE.Vector3(x, 0, d / 2), Math.PI);
+    // Each wall's sconces share three draws. Their offsets also place the light on the plaster.
+    const sconces = new THREE.Group();
+    sconces.position.copy(pos);
+    sconces.rotation.y = ry;
+    const posts = new THREE.InstancedMesh(pilaster, wainscotMat, bulbOffsets.length);
+    const cups = new THREE.InstancedMesh(cup, brassMat, bulbOffsets.length);
+    const bulbs = new THREE.InstancedMesh(sconceBulb, bulbMat, bulbOffsets.length);
+    bulbOffsets.forEach((x, i) => {
+      posts.setMatrixAt(i, placement.makeTranslation(x, (SPRING + 1.4) / 2, 0.04));
+      cups.setMatrixAt(i, placement.makeTranslation(x, 2.6, 0.16));
+      bulbs.setMatrixAt(i, placement.makeTranslation(x, SCONCE_HEIGHT, 0.16));
+    });
+    sconces.add(posts, cups, bulbs);
+    g.add(sconces);
   }
   // Smoked mirror panels between the pilasters of the entrance wall, brass-framed.
   const mirror = new THREE.PlaneGeometry(2.4, 2.4);
@@ -253,6 +247,17 @@ export function createRoom(): THREE.Group {
   const collar = new THREE.TorusGeometry(0.34, 0.05, 10, 32);
   const skylight = new THREE.CircleGeometry(0.45, 32);
   const bays = Math.floor(d / BAY) - 1;
+  // Keep a string on its own rib so looking down at the felt also culls its bulbs.
+  function litRib(span: number, rise: number, count: number): THREE.Mesh {
+    const rib = parabolicRib(span, rise, 0.06, brassMat);
+    const bulbs = new THREE.InstancedMesh(bulbGeometry, bulbMat, count);
+    for (let i = 0; i < count; i++) {
+      const u = 2 * (i + 1) / (count + 1) - 1;
+      bulbs.setMatrixAt(i, placement.makeTranslation(u * span, rise * (1 - u * u) - 0.14, 0));
+    }
+    rib.add(bulbs);
+    return rib;
+  }
   for (let i = 0; i <= bays; i++) {
     const z = -((bays * BAY) / 2) + i * BAY;
     for (const x of [-ARCADE_X, ARCADE_X]) {
@@ -278,27 +283,15 @@ export function createRoom(): THREE.Group {
         g.add(sk);
       }
       if (i < bays) {
-        const arch = parabolicRib(BAY / 2, 2.4, 0.06, brassMat);
+        const arch = litRib(BAY / 2, 2.4, 7);
         arch.rotation.y = Math.PI / 2;
         arch.position.set(x, SPRING, z + BAY / 2);
         g.add(arch);
-        for (let k = 1; k < 8; k++) {
-          const u = -1 + (k / 8) * 2;
-          const b = new THREE.Mesh(bulbGeometry, bulbMat);
-          b.position.set(x, SPRING + 2.4 * (1 - u * u) - 0.14, z + BAY / 2 + u * (BAY / 2));
-          g.add(b);
-        }
       }
     }
-    const rib = parabolicRib(ARCADE_X, h - 0.3 - SPRING, 0.06, brassMat);
+    const rib = litRib(ARCADE_X, h - 0.3 - SPRING, 13);
     rib.position.set(0, SPRING, z);
     g.add(rib);
-    for (let k = 1; k < 14; k++) {
-      const u = -1 + (k / 14) * 2;
-      const b = new THREE.Mesh(bulbGeometry, bulbMat);
-      b.position.set(u * ARCADE_X, SPRING + (h - 0.3 - SPRING) * (1 - u * u) - 0.14, z);
-      g.add(b);
-    }
   }
 
   // Tall round-headed windows in the long walls, one per bay, organic glass; burgundy drapes beside them.
@@ -332,7 +325,6 @@ export function createRoom(): THREE.Group {
 
   // The great chandelier: three brass tiers hung with crystal, over the table.
   const crystal = new THREE.MeshStandardMaterial({ color: 0xfff2d0, emissive: 0xffd28a, emissiveIntensity: 2.2, roughness: 0.2 });
-  const drop = new THREE.SphereGeometry(0.045, 10, 8);
   const chandelier = new THREE.Group();
   chandelier.name = "chandelier";
   for (const [radius, y, count] of [
@@ -344,12 +336,12 @@ export function createRoom(): THREE.Group {
     tier.rotation.x = Math.PI / 2;
     tier.position.y = y;
     chandelier.add(tier);
+    const drops = new THREE.InstancedMesh(bulbGeometry, crystal, count);
     for (let i = 0; i < count; i++) {
       const a = (i / count) * Math.PI * 2;
-      const dr = new THREE.Mesh(drop, crystal);
-      dr.position.set(Math.cos(a) * radius, y - 0.12, Math.sin(a) * radius);
-      chandelier.add(dr);
+      drops.setMatrixAt(i, placement.makeTranslation(Math.cos(a) * radius, y - 0.12, Math.sin(a) * radius));
     }
+    chandelier.add(drops);
   }
   const chain = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, h - 6.0, 8), brassMat);
   chain.position.y = (h + 6.0) / 2;
@@ -357,7 +349,7 @@ export function createRoom(): THREE.Group {
   g.add(chandelier);
 
   // Lights: the chandelier, moonlight through the windows, and a warm fill. The bar adds one.
-  const light = new THREE.PointLight(0xffd6a0, 260, 30, 2);
+  const light = new THREE.PointLight(0xffddb5, 155, 30, 2);
   light.position.y = 5.2;
   g.add(light);
   const moon = new THREE.DirectionalLight(0x8fb3ff, 0.6);

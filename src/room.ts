@@ -80,7 +80,8 @@ export async function enterRoom(entry: Entry) {
   scene.add(seats);
   // Nothing above ever moves: world matrices once, then no per-frame matrix work.
   for (const o of [room, table, bar, seats, splash]) freeze(o);
-  if (fxOn()) lightTable(renderer, scene, [room, table, bar, seats, splash]);
+  // Only the furniture around the table is inside the lamp's shadow cone.
+  if (fxOn()) lightTable(renderer, scene, [table, seats]);
   void reflectRoom(renderer, scene, [room, table, bar, seats, splash], texturesReady());
 
   // One character per seat, seated and facing the table: yours from the profile, the bots the

@@ -11,8 +11,51 @@ const RADIUS = 0.021;
 const HEIGHT = 0.004;
 const COLUMN = 10;
 const CAPACITY = 200;
-const geometry = new THREE.CylinderGeometry(RADIUS, RADIUS, HEIGHT, 24);
-const material = new THREE.MeshStandardMaterial({ roughness: 0.55, metalness: 0.05 });
+// A small bevel catches the lamp between stacked chips. The contrasting clay inserts
+// wrap from the face across the rim, so the denomination is still visible edge-on.
+const half = HEIGHT / 2;
+const bevel = 0.0004;
+const profile = [[0, -half], [RADIUS - bevel, -half], [RADIUS, half - bevel], [RADIUS - bevel, half], [0, half]] as const;
+const geometry = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), 18);
+// Project the same face pattern onto the bevel and side so each insert is continuous.
+const positions = geometry.getAttribute("position");
+const uv = geometry.getAttribute("uv");
+for (let i = 0; i < uv.count; i++) {
+  uv.setXY(i, 0.5 + positions.getX(i) / (2 * RADIUS), 0.5 + positions.getZ(i) / (2 * RADIUS));
+}
+
+function chipInlay(): THREE.DataTexture {
+  const size = 128;
+  const mask = new Uint8Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = 2 * (x + 0.5) / size - 1;
+      const v = 2 * (y + 0.5) / size - 1;
+      const radius = Math.hypot(u, v);
+      const edgeSpot = radius > 0.75 && Math.cos(6 * Math.atan2(v, u)) > 0.5;
+      mask[y * size + x] = edgeSpot || Math.abs(radius - 0.59) < 0.025 ? 255 : 0;
+    }
+  }
+  const map = new THREE.DataTexture(mask, size, size, THREE.RedFormat);
+  map.generateMipmaps = true;
+  map.minFilter = THREE.LinearMipmapLinearFilter;
+  map.magFilter = THREE.LinearFilter;
+  map.needsUpdate = true;
+  return map;
+}
+
+const material = new THREE.MeshStandardMaterial({ map: chipInlay(), roughness: 0.72 });
+// Use the denomination and the inlay mask together in a single instanced draw.
+material.onBeforeCompile = (shader) => {
+  shader.fragmentShader = shader.fragmentShader.replace("#include <map_fragment>", "").replace(
+    "#include <color_fragment>",
+    `#include <color_fragment>
+    #ifdef USE_COLOR
+      vec3 spot = vColor.r > 0.7 ? vec3(0.035, 0.065, 0.11) : vec3(0.82, 0.76, 0.62);
+      diffuseColor.rgb = mix(diffuseColor.rgb, spot, texture2D(map, vMapUv).r);
+    #endif`,
+  );
+};
 const dummy = new THREE.Object3D();
 
 /** A pile of chips worth some amount, at its own origin on the felt. */
@@ -22,7 +65,6 @@ export class ChipPile {
 
   constructor() {
     this.mesh.count = 0;
-    this.mesh.frustumCulled = false; // its bounds change with every bet; culling a pile is not worth the bookkeeping
     this.mesh.castShadow = this.mesh.receiveShadow = true; // costs nothing while the renderer's shadow map is off
   }
 
@@ -49,6 +91,7 @@ export class ChipPile {
       this.mesh.setColorAt(i, color);
     });
     this.mesh.count = chips.length;
+    this.mesh.computeBoundingSphere(); // the stack grows and gains columns as bets come in
     this.mesh.instanceMatrix.needsUpdate = true;
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
