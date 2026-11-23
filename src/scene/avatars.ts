@@ -1,9 +1,9 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { MODELS, STAFF } from "./models.ts";
 import { RAIL_RADIUS, RAIL_TOP, SEAT_RADIUS } from "./table.ts";
 
-// Rocketbox avatars (MIT, see LICENSES.md): a 3ds Max Biped rig ("Bip01 ..." bones) and one
-// skinned mesh with the 52 ARKit face shape keys ("AK_09_EyeBlinkLeft", ...).
+// The house cast and older Rocketbox characters share Biped bone names and ARKit face shapes.
 
 export interface Avatar {
   root: THREE.Group;
@@ -18,6 +18,7 @@ export interface Avatar {
 }
 
 const loader = new GLTFLoader();
+const houseCast = new Set([...MODELS.map((model) => model.url), ...Object.values(STAFF)]);
 
 export async function loadAvatar(url: string): Promise<Avatar> {
   const gltf = await loader.loadAsync(url);
@@ -32,20 +33,25 @@ export async function loadAvatar(url: string): Promise<Avatar> {
   cutOut(root);
   if (!mesh) throw new Error(`${url}: no skinned mesh`);
   const m = mesh;
+  root.updateMatrixWorld(true);
+  // Our poses rotate joints and move or scale the whole character. The shipped
+  // rigs fit within 1.6 m of the pelvis even at full reach (avatars.test.ts).
+  const hips = bones.get("Bip01 Pelvis");
+  const bounds = hips && houseCast.has(url) ? new THREE.Sphere(hips.getWorldPosition(new THREE.Vector3()), 1.6) : null;
   // Body, head, lashes and glasses are separate meshes, each with its own copy of the face
   // shapes: a blink must reach them all, or the lids stay open while the lashes move.
   const faces: { mesh: THREE.SkinnedMesh; index: Map<string, number> }[] = [];
   root.traverse((o) => {
     const sm = o as THREE.SkinnedMesh;
     if (!sm.isSkinnedMesh) return;
-    sm.frustumCulled = false; // posed bones move vertices far from the rest-pose bounds
+    sm.frustumCulled = bounds !== null;
+    if (bounds) sm.boundingSphere = bounds.clone().applyMatrix4(sm.matrixWorld.clone().invert());
     if (!sm.morphTargetDictionary || !sm.morphTargetInfluences) return;
     const index = new Map<string, number>();
     for (const [key, i] of Object.entries(sm.morphTargetDictionary)) index.set(key.replace(/^AK_\d+_/, ""), i);
     faces.push({ mesh: sm, index });
   });
   // The rest pose faces +z: that direction, held in the head bone's frame, is the face's forward.
-  root.updateMatrixWorld(true);
   const headForward = new THREE.Vector3(0, 0, 1);
   const head = bones.get("Bip01 Head");
   if (head) headForward.applyQuaternion(head.getWorldQuaternion(new THREE.Quaternion()).invert());
@@ -124,7 +130,6 @@ function aim(avatar: Avatar, boneName: string, childName: string, dirRoot: THREE
   const b = avatar.bones.get(boneName);
   const c = avatar.bones.get(childName);
   if (!b?.parent || !c) return;
-  avatar.root.updateMatrixWorld(true);
   const bw = new THREE.Vector3();
   const cw = new THREE.Vector3();
   b.getWorldPosition(bw);
@@ -144,7 +149,6 @@ function aim(avatar: Avatar, boneName: string, childName: string, dirRoot: THREE
 function aimAt(avatar: Avatar, boneName: string, childName: string, targetRoot: THREE.Vector3) {
   const b = avatar.bones.get(boneName);
   if (!b) return;
-  avatar.root.updateMatrixWorld(true);
   const bw = new THREE.Vector3();
   b.getWorldPosition(bw);
   const bRoot = avatar.root.worldToLocal(bw);
@@ -162,7 +166,6 @@ function reach(avatar: Avatar, side: "L" | "R", target: THREE.Vector3, pole: THR
   const fore = avatar.bones.get(`Bip01 ${side} Forearm`);
   const hand = avatar.bones.get(`Bip01 ${side} Hand`);
   if (!upper || !fore || !hand) return;
-  avatar.root.updateMatrixWorld(true);
   const local = (b: THREE.Bone) => avatar.root.worldToLocal(b.getWorldPosition(new THREE.Vector3()));
   const shoulder = local(upper);
   const a = shoulder.distanceTo(local(fore));
@@ -184,7 +187,6 @@ function reach(avatar: Avatar, side: "L" | "R", target: THREE.Vector3, pole: THR
  * bone, which the Biped rig puts at the shoulders and MakeHuman's halfway up the neck, 9 cm higher.
  */
 function shoulders(avatar: Avatar): THREE.Vector3 {
-  avatar.root.updateMatrixWorld(true);
   const mid = new THREE.Vector3();
   for (const side of ["L", "R"]) {
     const b = avatar.bones.get(`Bip01 ${side} UpperArm`) ?? avatar.bones.get("Bip01 Neck");
@@ -199,7 +201,6 @@ function shoulders(avatar: Avatar): THREE.Vector3 {
  * the body's, so a hand laid on the rail stays on it whatever the character's size.
  */
 function beforeSeat(avatar: Avatar, out: number, across: number, y: number): THREE.Vector3 {
-  avatar.root.updateMatrixWorld(true);
   const q = avatar.root.getWorldQuaternion(new THREE.Quaternion());
   const at = avatar.root.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(across, 0, out).applyQuaternion(q)).setY(y);
   return avatar.root.worldToLocal(at);
@@ -302,7 +303,6 @@ export function palm(avatar: Avatar, side: "L" | "R"): { position: THREE.Vector3
   const bone = (n: string) => avatar.bones.get(`Bip01 ${side} ${n}`);
   const [hand, index, middle, pinky] = [bone("Hand"), bone("Finger1"), bone("Finger2"), bone("Finger4")];
   if (!hand || !index || !middle || !pinky) return null;
-  avatar.root.updateMatrixWorld(true);
   const at = (b: THREE.Bone) => b.getWorldPosition(new THREE.Vector3());
   const wrist = at(hand);
   const along = at(middle).sub(wrist).normalize();
@@ -337,7 +337,6 @@ export function curl(avatar: Avatar, side: "L" | "R", degrees: number) {
     const parent = b.parent.getWorldQuaternion(new THREE.Quaternion());
     const q = new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(thumb ? degrees / 3 : degrees));
     b.quaternion.premultiply(parent.clone().invert().multiply(q).multiply(parent));
-    b.updateMatrixWorld(true);
   }
 }
 

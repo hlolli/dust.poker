@@ -1,10 +1,9 @@
 import { expect, test } from "bun:test";
 import { chromium } from "playwright-core";
 
-test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network and only opens a table after both indexer checks pass", async () => {
+function serveSite() {
   const dist = new URL("../../dist/", import.meta.url);
-  const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
-  const site = Bun.serve({
+  return Bun.serve({
     hostname: "127.0.0.1", port: 0,
     fetch(req) {
       const path = new URL(req.url).pathname.slice(1) || "index.html";
@@ -12,6 +11,11 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
       return new Response(Bun.file(new URL(path, dist)));
     },
   });
+}
+
+test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network and only opens a table after both indexer checks pass", async () => {
+  const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
+  const site = serveSite();
   try {
     const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
     await context.addInitScript(() => {
@@ -63,6 +67,38 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     await connect.click();
     await page.getByRole("status").filter({ hasText: "Switch Test Lace to preprod" }).waitFor();
     expect(await join.isVisible()).toBe(false);
+  } finally {
+    await browser.close();
+    site.stop(true);
+  }
+}, 60_000);
+
+test.skipIf(!process.env.POKER_BROWSER_TEST)("the character preview resizes only when its layout changes at fractional pixel density", async () => {
+  const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
+  const site = serveSite();
+  try {
+    const page = await browser.newPage({ deviceScaleFactor: 1.25 });
+    await page.route("https://fonts.googleapis.com/**", route => route.fulfill({ contentType: "text/css", body: "" }));
+    await page.goto(site.url.href, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: "+ your name", exact: true }).click();
+    const changes = await page.locator(".creator canvas").evaluate(async (canvas: HTMLCanvasElement) => {
+      const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      canvas.style.width = "321px";
+      canvas.style.height = "241px";
+      await frame();
+      await frame();
+      let writes = 0;
+      const observer = new MutationObserver(records => { writes += records.length; });
+      observer.observe(canvas, { attributes: true, attributeFilter: ["width"] });
+      for (let i = 0; i < 5; i++) await frame();
+      const stationary = writes;
+      canvas.style.width = "357px";
+      await frame();
+      await frame();
+      observer.disconnect();
+      return { stationary, writes, width: canvas.width, height: canvas.height };
+    });
+    expect(changes).toEqual({ stationary: 0, writes: 1, width: 446, height: 301 });
   } finally {
     await browser.close();
     site.stop(true);

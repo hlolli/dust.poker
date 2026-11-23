@@ -18,7 +18,9 @@ export class Label {
   readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
   private readonly canvas = document.createElement("canvas");
   private readonly texture: THREE.CanvasTexture;
-  private text = "";
+  private text?: string;
+  private color?: string;
+  private background?: string;
 
   constructor(text: string, private readonly o: LabelOptions) {
     const [w, h] = o.canvas ?? [1024, 256];
@@ -41,14 +43,20 @@ export class Label {
   }
 
   set(text: string, override?: Partial<Pick<LabelOptions, "color" | "background">>) {
-    const o = { ...this.o, ...override };
-    if (text === this.text && !override) return;
+    const o = override ? { ...this.o, ...override } : this.o;
+    const color = o.color ?? "#fff";
+    const background = o.background;
+    if (text === this.text && color === this.color && background === this.background) return;
     this.text = text;
+    this.color = color;
+    this.background = background;
+    this.mesh.material.visible = Boolean(text || background);
+    if (!this.mesh.material.visible) return;
     const { canvas } = this;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (o.background) {
-      ctx.fillStyle = o.background;
+    if (background) {
+      ctx.fillStyle = background;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
     const font = o.font ?? "italic bold 150px 'Brush Script MT', 'Snell Roundhand', cursive";
@@ -56,7 +64,7 @@ export class Label {
     ctx.font = font.replace(/\d+px/, `${size}px`);
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillStyle = o.color ?? "#fff";
+    ctx.fillStyle = color;
     const lineHeight = size * LINE;
     const draw = () => lines.forEach((l, i) => drawLine(ctx, l, canvas.width / 2, canvas.height / 2 + (i - (lines.length - 1) / 2) * lineHeight));
     ctx.shadowBlur = 0;

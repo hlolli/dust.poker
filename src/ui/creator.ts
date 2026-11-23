@@ -64,17 +64,20 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
     };
     void setModel(look.model);
     let frame = 0;
+    const stageSize = new THREE.Vector2();
     const size = () => {
       const w = canvas.clientWidth || 320;
       const h = canvas.clientHeight || 480;
-      if (canvas.width !== w * renderer.getPixelRatio() || canvas.height !== h * renderer.getPixelRatio()) {
-        renderer.setSize(w, h, false);
-        camera.aspect = w / h;
-        camera.updateProjectionMatrix();
-      }
+      if (w === stageSize.x && h === stageSize.y) return;
+      stageSize.set(w, h);
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
     };
+    size();
+    const observer = new ResizeObserver(size);
+    observer.observe(canvas);
     const loop = (now: number) => {
-      size();
       if (avatar) avatar.root.rotation.y = Math.sin(now / 4000) * 0.6;
       // Mostly at you, as into a mirror: the camera is where you stand.
       life?.apply(now, { focus: camera.position, others: [], deciding: false });
@@ -98,6 +101,7 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
     };
     const close = (result: { name: string; look: Look } | null) => {
       cancelAnimationFrame(frame);
+      observer.disconnect();
       renderer.dispose();
       el.remove();
       resolve(result);

@@ -157,7 +157,6 @@ export class Life {
     const head = a.bones.get("Bip01 Head");
     if (!head) return;
     if (now >= this.nextLook) this.chooseLook(now, at);
-    a.root.updateMatrixWorld(true);
     // Where the face points now, and where it should, both in the character's own space.
     const rootQ = a.root.getWorldQuaternion(new THREE.Quaternion()).invert();
     const facing = a.headForward.clone().applyQuaternion(head.getWorldQuaternion(new THREE.Quaternion())).applyQuaternion(rootQ);
