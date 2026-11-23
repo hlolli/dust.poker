@@ -42,10 +42,14 @@ function texture(face: Card | "back"): THREE.CanvasTexture {
     ctx.textBaseline = "middle";
     ctx.fillText(SUIT_GLYPH[suitOf(face)], 128, 358 / 2 + 50);
   }
-  const t = new THREE.CanvasTexture(c);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 16; // the board lies nearly edge-on to a seated player; without it the faces blur to grey
-  return t;
+  return new THREE.CanvasTexture(c);
+}
+
+/** Shared print and cutout settings for the canvas faces and the illustrated house back. */
+export function printedCardMaterial(map: THREE.Texture) {
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = 16; // the board lies nearly edge-on to a seated player
+  return new THREE.MeshLambertMaterial({ map, alphaTest: 0.5, alphaToCoverage: true });
 }
 
 /** The deck's back pattern, for anything else made of cards (the dealer's deck). */
@@ -55,7 +59,7 @@ function material(face: Card | "back"): THREE.MeshLambertMaterial {
   let m = materials.get(face);
   // The rounded corners are transparent on the canvas; cut out by alpha, else they render black.
   // A cutout, not blending: blended cards sort against the label plates and lose.
-  if (!m) materials.set(face, (m = new THREE.MeshLambertMaterial({ map: texture(face), alphaTest: 0.5, alphaToCoverage: true })));
+  if (!m) materials.set(face, (m = printedCardMaterial(texture(face))));
   return m;
 }
 
@@ -67,10 +71,10 @@ function material(face: Card | "back"): THREE.MeshLambertMaterial {
 export class CardMesh {
   readonly mesh = new THREE.Group();
   private readonly front: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshLambertMaterial>;
-  constructor() {
-    this.front = new THREE.Mesh(geometry, material("back"));
+  constructor(private readonly backMaterial = cardBack()) {
+    this.front = new THREE.Mesh(geometry, backMaterial);
     this.front.position.z = 0.0003;
-    const back = new THREE.Mesh(geometry, material("back"));
+    const back = new THREE.Mesh(geometry, backMaterial);
     back.rotation.y = Math.PI;
     back.position.z = -0.0003;
     this.front.castShadow = back.castShadow = true; // the alpha test keeps the rounded corners out of the shadow too
@@ -81,6 +85,6 @@ export class CardMesh {
   }
   show(face: Card | "back" | null) {
     this.mesh.visible = face !== null;
-    if (face) this.front.material = material(face);
+    if (face) this.front.material = face === "back" ? this.backMaterial : material(face);
   }
 }

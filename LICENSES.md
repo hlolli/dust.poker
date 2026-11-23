@@ -32,6 +32,19 @@ Our own, built by `scripts/make-character.py` with [MPFB](https://extensions.ble
 
 The GLBs are CC0 in turn. The packs are not in this repository; `make-character.py` names what it needs.
 
+## Lounge study (src/assets/lounge-study/)
+
+| Asset | Origin | Licence |
+| --- | --- | --- |
+| `backbar.glb` | Cabinet, brass inlay, shelves and bottles modelled for dust.poker. The three wall lamps share one mesh reconstructed locally from an ImageGen reference made for the project. The wood uses the colour map from [ambientCG Wood066](https://ambientcg.com/a/Wood066). | [MIT](LICENSE) for the new artwork. The wood texture is CC0. |
+| `dealer-jacket.webp` | ImageGen jacquard treatment of the project's dealer outfit, fitted to the jacket and sleeve areas of the original MakeHuman texture atlas. | [MIT](LICENSE) for the new artwork. The underlying outfit is CC0 as listed above. |
+| `jukebox.glb` | Cabinet reconstructed locally with TripoSR. The grille and illuminated glass use the project's jukebox reference. The veneer uses [ambientCG Wood066](https://ambientcg.com/a/Wood066). | [MIT](LICENSE) for the new artwork. The wood texture is CC0. |
+| `falcon-button.glb` | The project's falcon reference reconstructed with TripoSR and finished with a brass bezel and a printed dealer band. | [MIT](LICENSE) |
+| `falcon-back.webp` | Falcon artwork made with ImageGen for dust.poker, cropped and rotated into a two-way playing-card print. | [MIT](LICENSE) |
+| `spike/lounge-study/sconce.webp`, `spike/lounge-study/jukebox.webp`, `spike/lounge-study/falcon.webp` | Reference artwork made with ImageGen for dust.poker. | [MIT](LICENSE) |
+
+The lamp, jukebox and falcon were made with [TripoSR at 107cefd](https://github.com/VAST-AI-Research/TripoSR/tree/107cefdc244c39106fa830359024f6a2f1c78871) and [checkpoint 5b52193](https://huggingface.co/stabilityai/TripoSR/tree/5b521936b01fbe1890f6f9baed0254ab6351c04a). The authors license the code and weights under MIT. The [DINO ViT-B/16 encoder configuration](https://huggingface.co/facebook/dino-vitb16) is Apache-2.0. The game ships the finished artwork.
+
 ## Avatars (src/assets/avatars/)
 
 No longer in the game: the room and the creator use the characters above.

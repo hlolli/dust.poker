@@ -8,8 +8,7 @@ import { Label } from "./text.ts";
 
 const FELT_Y = 0.782;
 const SMALL = { font: "bold 64px Georgia, serif", canvas: [512, 128] as [number, number] };
-// The dealer button, shared by all six seats (only one is visible at a time).
-const buttonGeometry = new THREE.CylinderGeometry(0.025, 0.025, 0.008, 24);
+const buttonGeometry = new THREE.CylinderGeometry(0.025, 0.025, 0.008, 24).translate(0, 0.004, 0);
 const buttonMaterial = new THREE.MeshLambertMaterial({ color: 0xf6f1e6 });
 // A hole card at rest in a player's hands: the pair fanned slightly.
 const restPosition = (k: number) => new THREE.Vector3((k - 0.5) * 0.035, 0, k * 0.003);
@@ -18,11 +17,12 @@ const restZ = (k: number) => (k - 0.5) * -0.3;
 /** Renders a TableState onto the table: cards, labels, pot, message. */
 export class TableView {
   readonly group = new THREE.Group();
-  private readonly board = Array.from({ length: 5 }, () => new CardMesh());
+  private readonly board: CardMesh[];
   private readonly hole: CardMesh[][] = [];
   private readonly nameLabels: Label[] = [];
   private readonly betLabels: Label[] = [];
-  private readonly buttons: THREE.Mesh[] = [];
+  private readonly button: THREE.Object3D;
+  private readonly buttonPositions: THREE.Vector3[] = [];
   /** Each seat's chips: the stack by the player, and what they have bet this street, out on the felt. */
   private readonly stacks: ChipPile[] = [];
   private readonly bets: ChipPile[] = [];
@@ -52,8 +52,12 @@ export class TableView {
   /** The last state shown, for the stacks the pot lands on. */
   private latest: TableState | null = null;
 
-  constructor(private readonly you: number) {
+  constructor(private readonly you: number, set?: { cardBack?: THREE.MeshLambertMaterial; dealerButton?: THREE.Object3D }) {
     this.group.name = "table-view";
+    this.board = Array.from({ length: 5 }, () => new CardMesh(set?.cardBack));
+    this.button = set?.dealerButton ?? new THREE.Mesh(buttonGeometry, buttonMaterial);
+    this.button.visible = false;
+    this.group.add(this.button);
     const eye = seatPose(you).position.clone().setY(EYE_HEIGHT);
 
     // Board cards are 1.6 m from your eyes; at true size they read as slivers. Scale them
@@ -86,7 +90,7 @@ export class TableView {
       const side = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
       // Other seats' cards stand up slightly toward the table so their backs are visible from
       // across it; yours sit left of the rail controls, tilted up to read.
-      const pair = [new CardMesh(), new CardMesh()];
+      const pair = [new CardMesh(set?.cardBack), new CardMesh(set?.cardBack)];
       pair.forEach((c, k) => {
         const p = position.clone().add(toCentre.clone().multiplyScalar(mine ? 0.98 : 0.8));
         if (mine) p.add(side.clone().multiplyScalar(-0.2));
@@ -126,10 +130,7 @@ export class TableView {
       this.stacks.push(stack);
 
       // Dealer button on the felt beside the seat's cards, clear of the rail controls.
-      const button = new THREE.Mesh(buttonGeometry, buttonMaterial);
-      button.position.copy(position).add(toCentre.clone().multiplyScalar(0.9)).add(side.clone().multiplyScalar(0.12)).setY(FELT_Y + 0.004);
-      this.group.add(button);
-      this.buttons.push(button);
+      this.buttonPositions.push(position.clone().addScaledVector(toCentre, 0.9).addScaledVector(side, 0.12).setY(FELT_Y));
     }
   }
 
@@ -157,7 +158,10 @@ export class TableView {
     const { position, yaw } = seatPose(seat);
     const toCentre = position.clone().negate().normalize();
     const side = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
-    return position.clone().addScaledVector(toCentre, SEAT_RADIUS - TABLE_RADIUS + 0.1) // just inside the rail.addScaledVector(side, -0.05 + (k - 0.5) * (CARD_W + 0.004)).setY(FELT_Y + 0.003 + k * 0.001);
+    return position.clone()
+      .addScaledVector(toCentre, SEAT_RADIUS - TABLE_RADIUS + 0.1)
+      .addScaledVector(side, -0.05 + (k - 0.5) * (CARD_W + 0.004))
+      .setY(FELT_Y + 0.003 + k * 0.001);
   }
 
   /** Cards are in the air from the deck: the dealer's hand is over it, throwing. */
@@ -342,7 +346,9 @@ export class TableView {
       // A winner's stack waits for the pot to arrive (animate).
       if (!this.awards.some((a) => a.seat === i)) this.shownStack[i] = seat.name ? seat.stack : 0;
       this.stacks[i]!.set(this.shownStack[i]!);
-      this.buttons[i]!.visible = s.dealer === i && seat.name !== null;
     });
+    const at = this.buttonPositions[s.dealer];
+    this.button.visible = at !== undefined && s.seats[s.dealer]?.name != null;
+    if (at && this.button.visible) this.button.position.copy(at);
   }
 }

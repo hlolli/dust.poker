@@ -12,7 +12,7 @@ export const BARTENDER_POSE = { position: new THREE.Vector3(BAR.x + 0.55, 0, BAR
 // What a back bar holds: whisky and rum in amber and brown, gin in green glass, a clear vodka, a red aperitif.
 const BOTTLE_COLORS = [0x8a4a12, 0x5a2e0c, 0x1f5a2a, 0xb07a2a, 0xd8d4c8, 0x7a1414, 0x3a2008];
 
-export function createBar(): THREE.Group {
+export function createBar(backBar?: THREE.Group): THREE.Group {
   const g = new THREE.Group();
   g.name = "bar";
   const wood = darkWood(2);
@@ -34,6 +34,49 @@ export function createBar(): THREE.Group {
   rail.position.set(x - 0.45, 0.25, z);
   g.add(rail);
 
+  if (backBar) {
+    backBar.position.set(6.95, 0, z);
+    backBar.rotation.y = -Math.PI / 2;
+    g.add(backBar);
+  } else {
+    addHouseShelves(g, wood, length, z);
+  }
+
+  // Stools on the room side of the counter.
+  const seat = new THREE.CylinderGeometry(0.19, 0.19, 0.08, 20);
+  const post = new THREE.CylinderGeometry(0.03, 0.03, 0.7, 10);
+  const base = new THREE.CylinderGeometry(0.2, 0.22, 0.03, 20);
+  const leatherMat = leather(1);
+  for (let i = 0; i < 4; i++) {
+    const sz = z - length / 2 + 0.9 + i * ((length - 1.8) / 3);
+    const s = new THREE.Mesh(seat, leatherMat);
+    s.position.set(x - 0.85, 0.74, sz);
+    g.add(s);
+    const p = new THREE.Mesh(post, brassMat);
+    p.position.set(x - 0.85, 0.37, sz);
+    g.add(p);
+    const b = new THREE.Mesh(base, brassMat);
+    b.position.set(x - 0.85, 0.015, sz);
+    g.add(b);
+  }
+
+  // A few glasses on the counter.
+  const glassGeometry = new THREE.CylinderGeometry(0.035, 0.03, 0.1, 12, 1, true);
+  const glassMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
+  for (const dz of [-2.1, -0.6, 0.9, 2.3]) {
+    const gl = new THREE.Mesh(glassGeometry, glassMat);
+    gl.position.set(x - 0.15, 1.2, z + dz);
+    g.add(gl);
+  }
+
+  // The bar's own light, warm, low over the counter.
+  const light = new THREE.PointLight(0xffc27a, 40, 9, 2);
+  light.position.set(x - 0.2, 2.6, z);
+  g.add(light);
+  return g;
+}
+
+function addHouseShelves(g: THREE.Group, wood: THREE.Material, length: number, z: number) {
   // Back bar against the wall: shelves in front of a mirror, bottles glowing on them.
   const wallX = 6.95;
   const mirror = new THREE.Mesh(new THREE.PlaneGeometry(length, 2.2), chrome());
@@ -70,37 +113,4 @@ export function createBar(): THREE.Group {
       g.add(n);
     }
   }
-
-  // Stools on the room side of the counter.
-  const seat = new THREE.CylinderGeometry(0.19, 0.19, 0.08, 20);
-  const post = new THREE.CylinderGeometry(0.03, 0.03, 0.7, 10);
-  const base = new THREE.CylinderGeometry(0.2, 0.22, 0.03, 20);
-  const leatherMat = leather(1);
-  for (let i = 0; i < 4; i++) {
-    const sz = z - length / 2 + 0.9 + i * ((length - 1.8) / 3);
-    const s = new THREE.Mesh(seat, leatherMat);
-    s.position.set(x - 0.85, 0.74, sz);
-    g.add(s);
-    const p = new THREE.Mesh(post, brassMat);
-    p.position.set(x - 0.85, 0.37, sz);
-    g.add(p);
-    const b = new THREE.Mesh(base, brassMat);
-    b.position.set(x - 0.85, 0.015, sz);
-    g.add(b);
-  }
-
-  // A few glasses on the counter.
-  const glassGeometry = new THREE.CylinderGeometry(0.035, 0.03, 0.1, 12, 1, true);
-  const glassMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.35, side: THREE.DoubleSide });
-  for (const dz of [-2.1, -0.6, 0.9, 2.3]) {
-    const gl = new THREE.Mesh(glassGeometry, glassMat);
-    gl.position.set(x - 0.15, 1.2, z + dz);
-    g.add(gl);
-  }
-
-  // The bar's own light, warm, low over the counter.
-  const light = new THREE.PointLight(0xffc27a, 40, 9, 2);
-  light.position.set(x - 0.2, 2.6, z);
-  g.add(light);
-  return g;
 }

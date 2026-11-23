@@ -11,14 +11,22 @@ import { DEALER_POSE } from "./table.ts";
  * suit (the shoes, at the bottom of the atlas, are left alone), and the tie sits alone in its
  * own patch of the atlas.
  */
-export function dressAsDealer(avatar: Avatar) {
+export function dressAsDealer(avatar: Avatar, jacket?: THREE.Texture) {
   // Our own dealer (scripts/make-character.py) comes in a waistcoat and bow tie: the cloth burgundy, and done.
   let outfit: THREE.MeshStandardMaterial | undefined;
   avatar.root.traverse((o) => {
     const m = o as THREE.Mesh;
     if (m.isMesh && !Array.isArray(m.material) && m.material.name.endsWith("_outfit")) outfit = m.material as THREE.MeshStandardMaterial;
   });
-  if (outfit) return recolour(outfit, new THREE.Color(0x8a1222)); // reads burgundy under the warm lamp; darker went brown
+  if (outfit) {
+    if (jacket) {
+      outfit.map = jacket;
+      outfit.needsUpdate = true;
+    } else {
+      recolour(outfit, new THREE.Color(0x8a1222));
+    }
+    return;
+  }
 
   let bodyMesh: THREE.Mesh | undefined;
   avatar.root.traverse((o) => {
@@ -92,9 +100,9 @@ export function dressAsDealer(avatar: Avatar) {
 export const DEAL_FROM = DEALER_POSE.position.clone().add(DEALER_POSE.position.clone().negate().setY(0).normalize().multiplyScalar(0.38)).setY(0.98);
 
 /** The deck in the dealer's left palm: fifty-two cards, back up, riding on the hand bone. */
-export function deckInHand(avatar: Avatar): THREE.Mesh {
+export function deckInHand(avatar: Avatar, back = cardBack()): THREE.Mesh {
   const paper = new THREE.MeshLambertMaterial({ color: 0xf6f1e6 });
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(CARD_W, 0.016, CARD_H), [paper, paper, cardBack(), cardBack(), paper, paper]);
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(CARD_W, 0.016, CARD_H), [paper, paper, back, back, paper, paper]);
   // On the left palm itself (found from the finger bones), lying in the palm's own plane: it
   // rides with the hand and cannot drift off into the air between the hands.
   const p = palm(avatar, "L");

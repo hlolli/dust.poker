@@ -14,6 +14,18 @@ bun test
 bun run check  # compile contracts + typecheck + test + build
 ```
 
+### Art Deco lounge experiment
+
+Open [the Deco lounge](https://dust.poker/?lounge=deco) and choose **Practice**, or use [the local room](http://localhost:3000/?lounge=deco) with `bun dev` running. A brass falcon marks the dealer seat. The same reversible teal-and-gold back appears on the dealer's deck, in players' hands and on the felt. [View the table set](spike/lounge-study/table-set.jpg)
+
+The jazz plays from the walnut jukebox beside the bar. Click the cabinet, select it with an XR controller, or press **M** to mute or resume the music. The amber and jade arch dims when muted. Look behind the bartender for the fan lamps and at the dealer's jacket for the jacquard. The five extra game assets total about 761 KiB. [Jukebox from a playing seat](spike/lounge-study/jukebox-comparison.jpg) · [Back bar and jacket](spike/lounge-study/comparison.jpg) · [Asset credits](LICENSES.md#lounge-study-srcassetslounge-study)
+
+To make another prop, run `bun run lounge:studio` (requires `uv`) and open the local address it prints. Pick the lamp, jukebox or falcon, or upload a single object on a white or transparent background. Set the triangle budget, choose **Generate prop** to inspect the mesh, then **Download GLB** to keep it. The first launch downloads Python dependencies and the 1.6 GB TripoSR checkpoint. The studio then runs on the CPU with cached model files in `.compact/lounge-studio/`.
+
+To recreate the game jukebox, export its example at 2,400 triangles, then run `uv run spike/lounge-study/finish-jukebox.py downloaded.glb src/assets/lounge-study/jukebox.glb`. This fits the reference artwork and light mask to the front, wraps the back in walnut and sets the cabinet on its feet at 1.54 metres tall.
+
+For the dealer button, export the falcon at 1,600 triangles and run `uv run spike/lounge-study/finish-button.py downloaded.glb src/assets/lounge-study/falcon-button.glb` to mount it on its inscribed collar.
+
 ## Live on Ledger 9
 
 ### Play with colleagues

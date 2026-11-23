@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "bun scripts/dev.ts",
+    "lounge:studio": "uv run --python 3.12 spike/lounge-study/studio.py",
     "build": "bun scripts/build-site.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",

@@ -1,5 +1,27 @@
 import * as THREE from "three";
 
+/** Hidden rail buttons cannot take a click. Distant props also need a clear line of sight. */
+export function pickControl(ray: THREE.Raycaster, targets: ReadonlyMap<THREE.Object3D, THREE.Scene | undefined>) {
+  const visible: THREE.Object3D[] = [];
+  for (const target of targets.keys()) {
+    let ancestor: THREE.Object3D | null = target;
+    while (ancestor?.visible) ancestor = ancestor.parent;
+    if (!ancestor) visible.push(target);
+  }
+  const hit = ray.intersectObjects(visible, false)[0];
+  if (!hit) return;
+  const scene = targets.get(hit.object);
+  if (scene) {
+    const solid: THREE.Mesh[] = [];
+    scene.traverseVisible(o => {
+      if (o instanceof THREE.Mesh && (Array.isArray(o.material) || !o.material.transparent)) solid.push(o);
+    });
+    const nearest = ray.intersectObjects(solid, false)[0];
+    if (nearest && nearest.distance < hit.distance - 0.001) return;
+  }
+  return hit.object;
+}
+
 /**
  * Desktop mouse-look for a seated camera, plus one click/select path that works
  * for the mouse and for XR controllers alike. The camera lives inside a rig group;
@@ -11,7 +33,7 @@ export function attachControls(
   rig: THREE.Group,
   onSelect: (hit: THREE.Object3D) => void,
 ) {
-  const interactables: THREE.Object3D[] = [];
+  const interactables = new Map<THREE.Object3D, THREE.Scene | undefined>();
   const raycaster = new THREE.Raycaster();
   const euler = new THREE.Euler(0, 0, 0, "YXZ");
   const el = renderer.domElement;
@@ -51,17 +73,16 @@ export function attachControls(
   }
 
   function fire() {
-    const hit = raycaster.intersectObjects(interactables, false)[0];
-    if (hit) onSelect(hit.object);
+    const hit = pickControl(raycaster, interactables);
+    if (hit) onSelect(hit);
   }
 
   return {
-    register(o: THREE.Object3D) {
-      interactables.push(o);
+    register(o: THREE.Object3D, occlusionScene?: THREE.Scene) {
+      interactables.set(o, occlusionScene);
     },
     unregister(o: THREE.Object3D) {
-      const i = interactables.indexOf(o);
-      if (i >= 0) interactables.splice(i, 1);
+      interactables.delete(o);
     },
   };
 }

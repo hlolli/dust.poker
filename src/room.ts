@@ -64,7 +64,15 @@ export async function enterRoom(entry: Entry) {
   pmrem.dispose();
   const room = createRoom();
   const table = createTable();
-  const bar = createBar();
+  const study = new URLSearchParams(location.search).get("lounge") === "deco"
+    ? await import("./scene/lounge-study.ts").then(m => m.loadLoungeStudy()).catch(error => {
+      console.warn("Could not load the Deco lounge study", error);
+      return undefined;
+    })
+    : undefined;
+  const bar = createBar(study?.backBar);
+  const jukebox = study?.jukebox;
+  if (jukebox) bar.add(jukebox.cabinet);
   const splash = createSplash();
   scene.add(room, table, bar, splash);
 
@@ -147,8 +155,8 @@ export async function enterRoom(entry: Entry) {
         else poseStanding(a);
         scene.add(fxOn() ? shadowed(a.root) : a.root);
         if (name === "dealer") {
-          dressAsDealer(a);
-          deckInHand(a);
+          dressAsDealer(a, study?.jacket);
+          deckInHand(a, study?.cardBack);
           dealerAvatar = a;
         }
         lives.set(a, new Life(a, { seed: name === "dealer" ? 11 : 12, standing: true }));
@@ -168,19 +176,18 @@ export async function enterRoom(entry: Entry) {
   Object.assign(window as unknown as Record<string, unknown>, { __scene: scene, __rig: rig, __camera: camera });
 
   let onSelect: (hit: THREE.Object3D) => void = () => {};
-  const controls = attachControls(renderer, camera, rig, (hit) => onSelect(hit));
-
-  // The band plays from the bar (the menu click was the gesture browsers want). M mutes, as
-  // does the note in the corner.
-  const lounge = startLounge(camera, scene, new THREE.Vector3(BAR.x - 1.2, 1.4, BAR.z));
+  const lounge = startLounge(camera, scene, jukebox?.speaker ?? new THREE.Vector3(BAR.x - 1.2, 1.4, BAR.z));
   Object.assign(window as unknown as Record<string, unknown>, { __lounge: lounge });
   const mute = document.createElement("button");
   mute.className = "mute";
   mute.type = "button";
+  mute.setAttribute("aria-label", "Mute lounge music");
   const showMuted = () => {
     mute.textContent = lounge.muted ? "♪ off" : "♪";
     mute.title = lounge.muted ? "The band is muted (M)" : "Mute the band (M)";
     mute.classList.toggle("off", lounge.muted);
+    mute.setAttribute("aria-pressed", String(lounge.muted));
+    jukebox?.setMuted(lounge.muted);
   };
   mute.onclick = () => {
     lounge.setMuted(!lounge.muted);
@@ -191,6 +198,11 @@ export async function enterRoom(entry: Entry) {
   window.addEventListener("keydown", (e) => {
     if (e.key === "m" || e.key === "M") mute.click();
   });
+  const controls = attachControls(renderer, camera, rig, hit => {
+    if (!jukebox?.cabinet.getObjectById(hit.id)) return onSelect(hit);
+    mute.click();
+  });
+  jukebox?.cabinet.traverse(o => { if (o instanceof THREE.Mesh) controls.register(o, scene); });
 
   // Back to the main menu. The page reloads into it: the simplest full teardown of the scene,
   // the renderer and the band, and the page's own address (network, table) is kept.
@@ -344,7 +356,7 @@ export async function enterRoom(entry: Entry) {
       const { ContractReferee } = await import("./referee/contract.ts");
       referee = new ContractReferee({ names, you: YOU });
     }
-    const tableView = (view = new TableView(YOU));
+    const tableView = (view = new TableView(YOU, study));
     // A deal won: the pot slides to each winner, the dealer pushing it off and the winner drawing
     // it in; on a screen, the camera makes a film shot of it meanwhile.
     tableView.onAward = (piles, ms) => {
