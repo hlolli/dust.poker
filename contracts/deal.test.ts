@@ -429,10 +429,17 @@ test("pipelining: a prepared deck is dropped when one of its players has left or
   await u.prepare();
   await u.foldOut();
   await u.call(3, "leave", 3n);
+  expect(u.ledger.next_prep).toBe(Prep.none);
+  const replacement = player();
+  replacement.seat = 3;
+  u.players[3] = replacement;
+  expect(await u.call(3, "join", addr(4), 200n)).toBe(3n);
   await u.call(0, "start_deal");
-  expect(u.ledger.phase).toBe(Phase.keys); // from scratch
-  expect(u.ledger.n_players).toBe(3n);
-  expect(u.ledger.next_in_deal.slice(0, 4)).toEqual([true, true, true, false]);
+  expect(u.ledger.phase).toBe(Phase.keys);
+  expect(u.ledger.n_players).toBe(4n);
+  expect(u.ledger.keys.member(3n)).toBe(false);
+  await u.call(3, "post_key", 3n);
+  expect(u.ledger.keys.member(3n)).toBe(true);
 }, 120_000);
 
 test("pipelining: a player who misses a preparation step is evicted between deals and the preparation restarts", async () => {

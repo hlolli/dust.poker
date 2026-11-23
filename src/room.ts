@@ -197,7 +197,7 @@ export async function enterRoom(entry: Entry) {
   const leave = document.createElement("button");
   leave.className = "leave";
   leave.type = "button";
-  leave.textContent = "Leave table";
+  leave.textContent = entry.mode === "live" ? "Back to menu" : "Leave table";
   leave.title = entry.mode === "live" ? "Back to the menu. Your seat and chips stay yours at the table; take a seat again to come back." : "Back to the menu";
   leave.onclick = () => {
     // On a Live table your client does your steps in a deal; gone, it misses them, and a missed
@@ -206,7 +206,10 @@ export async function enterRoom(entry: Entry) {
     if (dealing && !confirm("A deal is under way. Leaving now misses your turns in it, and the table can charge your bond for that. Leave anyway?")) return;
     location.reload();
   };
-  document.body.append(leave);
+  const tableControls = document.createElement("div");
+  tableControls.className = "table-controls";
+  tableControls.append(leave);
+  document.body.append(tableControls);
 
   // The entrance: a timeline from the moment your character has loaded. Walk to the side of
   // your chair, pull it out from the table, step in front of it, sit as it slides back under
@@ -323,7 +326,19 @@ export async function enterRoom(entry: Entry) {
     let referee: Referee & { start(): void | Promise<void> };
     if (entry.mode === "live") {
       const { LiveReferee } = await import("./live/referee.ts");
-      referee = new LiveReferee(entry.chain, entry.seat, { store: entry.store });
+      const live = new LiveReferee(entry.chain, entry.seat, { store: entry.store });
+      referee = live;
+      const cashOut = document.createElement("button");
+      cashOut.type = "button";
+      cashOut.className = "leave";
+      cashOut.title = "Finish any hand you are playing, then return your stack and bond to your wallet.";
+      cashOut.onclick = () => live.cashOut();
+      live.subscribe(() => {
+        const state = live.cashOutState;
+        cashOut.disabled = state !== "ready";
+        cashOut.textContent = state === "waiting" ? "Cash-out pending" : state === "closed" ? "Seat closed" : "Cash out";
+      });
+      tableControls.append(cashOut);
     } else {
       const names = Array.from({ length: SEAT_COUNT }, (_, i) => (i === YOU ? profile.name : BOT_NAMES[(i + (i < YOU ? 0 : -1) + 5) % 5]!));
       const { ContractReferee } = await import("./referee/contract.ts");

@@ -38,14 +38,16 @@ async function settled(chain: Chain, ok: (state: L.ContractState | null) => bool
  * fee. The deploy comes in parts (ledger.ts, deployInParts), each waited for before the next, and
  * the address is handed back once the last part has locked the circuits.
  */
-export async function deployTable(w: Wallet, profile: Profile): Promise<string> {
+export async function deployTable(w: Wallet, profile: Profile, progress?: (message: string) => void): Promise<string> {
   const constructed = await you(profile).contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), ASSET());
   const { params } = await walletChain(w, "00".repeat(32)).snapshot();
   const plan = await deployInParts(w.networkId, constructed.currentContractState, keyMaterial.getVerifierKey, params, new Date(Date.now() + HOUR));
   const chain = walletChain(w, plan.address);
+  progress?.(`Confirm table deployment 1 of ${1 + plan.updates.length} in the wallet.`);
   await submitThrough(w, plan.deploy);
   await settled(chain, (s) => s !== null, "the deploy");
   for (const [i, update] of plan.updates.entries()) {
+    progress?.(`Confirm table deployment ${i + 2} of ${1 + plan.updates.length} in the wallet.`);
     await submitThrough(w, update);
     await settled(chain, (s) => s !== null && s.maintenanceAuthority.counter > BigInt(i), `update ${i + 1} of ${plan.updates.length}`);
   }
@@ -66,11 +68,19 @@ export async function joinOn(chain: Chain, seat: Seat, payout: Uint8Array, buy =
     if (held >= 0) return (seat.index = held);
   }
   const { tx, result } = await callOn(chain, snap, seat, "join", [payout, buy]);
+  const proposed = BigInt(Number(result));
   await chain.submit(tx);
-  seat.index = Number(result);
-  // Until the chain shows the seat as ours, nothing is joined: another player's join in the
-  // same block would have taken the seat this one was computed for.
-  await settled(chain, (s) => s !== null && seatOf(ledger(RuntimeContractState.deserialize(s.serialize()).data), seat.secret) === seat.index, "the join");
+  await settled(chain, (state) => {
+    if (!state) return false;
+    const l = ledger(RuntimeContractState.deserialize(state.serialize()).data);
+    const held = seatOf(l, seat.secret);
+    if (held >= 0) {
+      seat.index = held;
+      return true;
+    }
+    if (l.seat_owner.member(proposed)) throw new Error("Another player took that seat first. Choose Take a seat again for the next available seat.");
+    return false;
+  }, "the join");
   return seat.index;
 }
 

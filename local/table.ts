@@ -15,7 +15,6 @@ import { parseArgs } from "node:util";
 import { strict as assert } from "node:assert";
 import { ContractState } from "@midnight-ntwrk/compact-runtime";
 import { ledger } from "../contracts/build/deal/contract/index.js";
-import { callOn } from "../src/live/chain.ts";
 import { Phase } from "../src/referee/rules.ts";
 import { config, root, scriptWallet, seed } from "./wallet.ts";
 
@@ -172,24 +171,15 @@ async function main() {
     assert.equal(l.phase, Phase.done);
     assert.equal(l.scores.size(), 2n);
     assert.equal([...end.state!.balance.values()].reduce((a, b) => a + b, 0n), 800n);
+    for (const player of [a, b]) {
+      player.cashOut();
+      await until(player, () => player.cashOutState === "closed", 180_000);
+    }
   } finally {
     a.stop();
     b.stop();
   }
 
-  for (const joined of [ja, jb]) {
-    for (const circuit of ["stand_up", "leave"] as const) {
-      const before = await joined.chain.snapshot();
-      const args = circuit === "stand_up" ? [BigInt(joined.seat.index), true] : [BigInt(joined.seat.index)];
-      const { tx } = await callOn(joined.chain, before, joined.seat, circuit, args);
-      await joined.chain.submit(tx);
-      await waitFor(async () => {
-        const next = await joined.chain.snapshot();
-        const l = ledger(ContractState.deserialize(next.state!.serialize()).data);
-        return circuit === "stand_up" ? l.leaving[joined.seat.index]! : !l.seat_owner.member(BigInt(joined.seat.index));
-      }, circuit);
-    }
-  }
   const emptied = await ja.chain.snapshot();
   assert.equal([...emptied.state!.balance.values()].reduce((a, b) => a + b, 0n), 0n);
   await waitFor(async () => (await alice.nightBalance()) + (await bob.nightBalance()) === initialNight, "both stacks and bonds to return to the wallets");

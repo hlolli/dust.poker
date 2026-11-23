@@ -7,7 +7,7 @@ import type { Seat } from "../referee/contract.ts";
 import { type Arg, type Circuit, UNTIMED } from "../referee/rules.ts";
 import { opening as indexerOpening, snapshot as indexerSnapshot, watchContract } from "./indexer.ts";
 import { bytes, callTx, hex, prove } from "./ledger.ts";
-import type { KeyMaterialProvider, Wallet } from "./wallet.ts";
+import { isLocalSite, type KeyMaterialProvider, type Wallet } from "./wallet.ts";
 
 export type Snapshot = {
   /** The referee's state, or null when nothing is deployed at the address. */
@@ -49,10 +49,11 @@ export async function callOn(chain: Chain, snap: Snapshot, seat: Seat, circuit: 
 }
 
 // Proving artifacts, fetched from next to the site (build-site.ts copies contracts/build/deal
-// there) or from wherever `?keys=` points; the wallet's prover asks for them by circuit name.
-const keysBase = () => new URLSearchParams(location.search).get("keys") ?? "/deal";
+// there). Only a local development page may override the keys used to authenticate a table.
+export const keysBase = (page: Pick<Location, "hostname" | "search">) =>
+  (isLocalSite(page.hostname) && new URLSearchParams(page.search).get("keys")) || "/deal";
 const fetchBytes = async (path: string) => {
-  const res = await fetch(`${keysBase()}/${path}`);
+  const res = await fetch(`${keysBase(location)}/${path}`);
   if (!res.ok) throw new Error(`proving keys: ${path} ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
 };

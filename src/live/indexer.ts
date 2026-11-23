@@ -24,6 +24,12 @@ const SUBSCRIPTION = `subscription ($address: HexEncoded!) {
   contractActions(address: $address) { state transaction { block { timestamp ledgerParameters } } }
 }`;
 
+function openSocket(uri: string): WebSocket {
+  const ws = new WebSocket(uri, "graphql-transport-ws");
+  ws.onopen = () => ws.send(JSON.stringify({ type: "connection_init" }));
+  return ws;
+}
+
 /**
  * Follows the referee on the indexer's WebSocket: every action on the contract, from the
  * latest block on, as it is indexed. Speaks graphql-transport-ws (the graphql-ws protocol) by
@@ -38,9 +44,8 @@ export function watchContract(wsUri: string, address: string, onChange: (c: Chan
   let retry: ReturnType<typeof setTimeout> | null = null;
   const open = () => {
     if (stopped) return;
-    const ws = new WebSocket(wsUri, "graphql-transport-ws");
+    const ws = openSocket(wsUri);
     socket = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ type: "connection_init" }));
     ws.onmessage = (ev) => {
       let msg: { type?: string; id?: string; payload?: unknown };
       try {
@@ -112,8 +117,35 @@ export async function opening(indexerUri: string, address: string): Promise<stri
 
 /** The protocol the network runs, from its newest block: 1000300 is node 1.0.3 (ledger 8), 2001000 node 2.1.0 (ledger 9). */
 export async function protocolVersion(indexerUri: string): Promise<number> {
-  const res = await fetch(indexerUri, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "{ block { protocolVersion } }" }) });
+  const res = await fetch(indexerUri, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: "{ block { protocolVersion } }" }), signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`The indexer returned HTTP ${res.status}. Check the wallet's indexer settings and access, then reconnect.`);
   const v = ((await res.json()) as { data?: { block?: { protocolVersion?: number } } }).data?.block?.protocolVersion;
-  if (v === undefined) throw new Error(`the indexer at ${indexerUri} did not say which protocol it runs`);
+  if (typeof v !== "number" || !Number.isSafeInteger(v)) throw new Error("The indexer did not report a block protocol. Check the indexer address and reconnect.");
   return v;
+}
+
+/** Check both halves of the same connection that will read and follow the table. */
+export async function checkIndexer(http: string, wsUri: string): Promise<void> {
+  if (await protocolVersion(http) < 2_000_000) throw new Error("This network needs Ledger 9 before it can open a poker table.");
+  await new Promise<void>((resolve, reject) => {
+    const ws = openSocket(wsUri);
+    const finish = (ok: boolean) => {
+      clearTimeout(timer);
+      ws.onclose = ws.onerror = ws.onmessage = ws.onopen = null;
+      ws.close();
+      if (ok) resolve();
+      else reject(new Error("The indexer did not accept a WebSocket connection. Check the indexer settings and reconnect."));
+    };
+    const timer = setTimeout(() => finish(false), 10_000);
+    ws.onerror = ws.onclose = () => finish(false);
+    ws.onmessage = ({ data }) => {
+      try {
+        const { type } = JSON.parse(String(data));
+        if (type === "ping") ws.send(JSON.stringify({ type: "pong" }));
+        else finish(type === "connection_ack");
+      } catch {
+        finish(false);
+      }
+    };
+  });
 }

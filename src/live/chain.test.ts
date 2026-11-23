@@ -1,6 +1,10 @@
 import { expect, test } from "bun:test";
 import { jsonIrToBinary, Zkir } from "@midnightntwrk/zkir-v3";
-import { keyMaterial } from "./chain.ts";
+import { keyMaterial, keysBase } from "./chain.ts";
+
+test("public table invites always authenticate against the site's own proving keys", () => {
+  expect(keysBase({ hostname: "dust.poker", search: "?keys=https://other.example" })).toBe("/deal");
+});
 
 test("the wallet receives binary ZKIR v3 matching the compiled circuit", async () => {
   const root = `${import.meta.dir}/../../contracts/build/deal`;
@@ -14,7 +18,7 @@ test("the wallet receives binary ZKIR v3 matching the compiled circuit", async (
     },
   });
   const previous = Object.getOwnPropertyDescriptor(globalThis, "location");
-  Object.defineProperty(globalThis, "location", { configurable: true, value: { search: `?keys=${encodeURIComponent(server.url.href.slice(0, -1))}` } });
+  Object.defineProperty(globalThis, "location", { configurable: true, value: { hostname: "localhost", search: `?keys=${encodeURIComponent(server.url.href.slice(0, -1))}` } });
   try {
     const ir = await keyMaterial.getZKIR("join");
     expect(Zkir.deserialize(ir).getK()).toBeGreaterThan(0);

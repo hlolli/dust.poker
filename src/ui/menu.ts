@@ -3,14 +3,11 @@ import type { Chain } from "../live/chain.ts";
 import type { KeyStore } from "../live/referee.ts";
 import type { Seat } from "../referee/contract.ts";
 import { MODELS } from "../scene/models.ts";
-import { protocolVersion } from "../live/indexer.ts";
+import { checkIndexer } from "../live/indexer.ts";
 import { connect, installed, NETWORKS, network as asked, type Wallet } from "../live/wallet.ts";
 import { startBackdrop } from "./backdrop.ts";
 import { showCreator } from "./creator.ts";
 import { activate, activeProfile, createProfile, type Profile, profiles, removeProfile, updateProfile } from "./profiles.ts";
-
-/** The first protocol with ledger 9, which the contract and this site are built for (package.json). */
-const LEDGER_9 = 2_000_000;
 
 /**
  * The main menu, before the room loads: the house marquee, then a letterboard with three
@@ -48,16 +45,19 @@ export function showMenu(): Promise<Entry> {
         <section class="line live unlit">
           <div class="listing">
             <span class="title">Live table</span>
-            <span class="sub status">Test chips on Midnight Preview or Preprod, refereed on chain. Connect Lace to choose.</span>
+            <span class="sub status" role="status">Choose the same network as your Lace wallet.</span>
+            <span class="sub funding" hidden></span>
           </div>
           <div class="row">
+            <div class="network">${NETWORKS.map((n) => `<label class="ticket"><input type="radio" name="network" value="${n}" /><span>${n}</span></label>`).join("")}</div>
             <button class="connect" type="button">Connect Lace</button>
-            <div class="network" hidden>${NETWORKS.map((n) => `<label class="ticket"><input type="radio" name="network" value="${n}" /><span>${n}</span></label>`).join("")}</div>
+            <a href="https://github.com/hlolli/dust.poker#play-with-colleagues" target="_blank" rel="noreferrer">Wallet setup</a>
           </div>
           <div class="row table" hidden>
-            <input name="table" placeholder="Table address" autocomplete="off" spellcheck="false" />
+            <input name="table" aria-label="Table address" placeholder="Table address" autocomplete="off" spellcheck="false" />
             <button class="join" type="button">Take a seat</button>
             <button class="deploy" type="button">Open a new table</button>
+            <button class="share" type="button" hidden>Copy table link</button>
           </div>
         </section>
       </div>
@@ -150,59 +150,86 @@ export function showMenu(): Promise<Entry> {
     const connectButton = el.querySelector<HTMLButtonElement>(".connect")!;
     const network = el.querySelector<HTMLDivElement>(".network")!;
     const table = el.querySelector<HTMLDivElement>(".table")!;
+    const funding = el.querySelector<HTMLElement>(".funding")!;
     const address = el.querySelector<HTMLInputElement>("input[name=table]")!;
+    const share = el.querySelector<HTMLButtonElement>(".share")!;
     address.value = new URLSearchParams(location.search).get("table") ?? "";
+    let selected = asked();
     let wallet: Wallet | null = null;
     const say = (s: string) => (status.textContent = s);
-    const fail = (e: unknown) => say(e instanceof Error ? e.message : String(e));
-    const connected = async (w: Wallet) => {
-      wallet = w;
-      Object.assign(window as unknown as Record<string, unknown>, { __wallet: w }); // inspection handle
-      live.classList.remove("unlit");
-      network.hidden = false;
-      for (const r of network.querySelectorAll<HTMLInputElement>("input")) r.checked = r.value === w.networkId;
-      connectButton.hidden = true;
-      const who = `${w.name} on ${w.networkId}: ${w.address.slice(0, 22)}...${w.address.slice(-6)}`;
-      // A table needs the ledger the contract was compiled for; a network on an older one cannot run it.
-      const protocol = await protocolVersion(w.config.indexerUri).catch(() => null);
-      table.hidden = protocol !== null && protocol < LEDGER_9;
-      say(table.hidden ? `${who}. ${w.networkId} still runs ledger 8 and dust.poker plays on ledger 9: its tables open when the network upgrades.` : who);
+    const fail = (e: unknown) => say(typeof e === "object" && e !== null && "message" in e ? String(e.message) : String(e));
+    const lock = (busy: boolean) => {
+      for (const control of live.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")) control.disabled = busy;
     };
+    const pageAddress = (tableAddress: string) => {
+      const url = new URL(location.href);
+      url.searchParams.set("network", selected);
+      if (tableAddress) url.searchParams.set("table", tableAddress);
+      else url.searchParams.delete("table");
+      history.replaceState(null, "", url);
+    };
+    const updateShare = () => { share.hidden = !/^[a-f\d]{64}$/i.test(address.value.trim()); };
+    address.oninput = updateShare;
+    updateShare();
+    share.onclick = async () => {
+      const invite = new URL(location.pathname, location.origin);
+      invite.search = new URLSearchParams({ network: selected, table: address.value.trim() }).toString();
+      try {
+        await navigator.clipboard.writeText(invite.href);
+        say("Table link copied. Each player can open it and take a seat.");
+      } catch {
+        say(`Share this table link: ${invite.href}`);
+      }
+    };
+    for (const radio of network.querySelectorAll<HTMLInputElement>("input")) radio.checked = radio.value === selected;
+    if (address.value) say(`This table invite is for ${selected}. Choose that network in Lace, then connect.`);
     connectButton.onclick = async () => {
       const [found] = installed();
       if (!found) return say("No Midnight wallet in this browser. Install Lace, then reload.");
-      say(`${found.name}: confirm in the wallet`);
-      connectButton.disabled = true;
-      // Lace connects to one network at a time and wants it named; ask for each until one answers.
-      let error: unknown = null;
-      for (const id of [asked(), ...NETWORKS.filter((n) => n !== asked())]) {
-        try {
-          return await connected(await connect(found, id));
-        } catch (e) {
-          error = e;
-        }
-      }
-      connectButton.disabled = false;
-      // Lace says "Network ID mismatch" when it is on a network other than the one asked for.
-      if (error instanceof Error && /mismatch/i.test(error.message)) return say(`${found.name} is on another network. Switch it to ${NETWORKS.join(" or ")} in its settings, then connect again.`);
-      fail(error);
-    };
-    network.onchange = async (e) => {
-      const id = (e.target as HTMLInputElement).value;
-      const [found] = installed();
-      if (!found) return;
-      say(`Switching to ${id}: confirm in the wallet`);
+      say(`Confirm ${selected} in ${found.name}.`);
+      lock(true);
       try {
-        await connected(await connect(found, id));
-      } catch (err) {
-        fail(err);
-        if (wallet) for (const r of network.querySelectorAll<HTMLInputElement>("input")) r.checked = r.value === wallet.networkId;
+        const w = await connect(found, selected);
+        say(`Checking the ${selected} indexer…`);
+        await checkIndexer(w.config.indexerUri, w.config.indexerWsUri);
+        wallet = w;
+        Object.assign(window, { __wallet: w });
+        live.classList.remove("unlit");
+        connectButton.hidden = true;
+        table.hidden = false;
+        say(`${w.name} on ${selected}. A seat costs 200 STAR plus a 200 STAR bond. Transactions use tDUST.`);
+        void w.api.getDustBalance?.().then(({ balance, cap }) => {
+          if (wallet !== w || balance !== 0n) return;
+          funding.textContent = cap > 0n
+            ? "Lace reported zero spendable tDUST at connection. Wait for tDUST to accrue before starting."
+            : "Lace reported zero tDUST at connection. Fund its unshielded address from the faucet and choose Generate tDUST in Lace.";
+          funding.hidden = false;
+        }).catch(() => {});
+      } catch (error) {
+        fail(error);
+        if (/mismatch/i.test(status.textContent ?? "")) say(`Switch ${found.name} to ${selected}, then reconnect.`);
+      } finally {
+        lock(false);
       }
+    };
+    network.onchange = (e) => {
+      selected = (e.target as HTMLInputElement).value;
+      wallet = null;
+      Reflect.deleteProperty(window, "__wallet");
+      address.value = "";
+      pageAddress("");
+      updateShare();
+      live.classList.add("unlit");
+      table.hidden = true;
+      funding.hidden = true;
+      connectButton.hidden = false;
+      say(`Select ${selected} in Lace, then connect.`);
     };
     const withLive = async (what: string, run: (live: typeof import("../live/live.ts"), w: Wallet, profile: Profile) => Promise<string>) => {
       const profile = activeProfile();
       if (!wallet) return say("Connect the wallet first.");
       if (!profile) return say("Put your name on a plate first: it is your identity at the table.");
+      lock(true);
       say(`${what}: confirm in the wallet`);
       try {
         const [{ ready: runtimeReady }, { ready: ledgerReady }] = await Promise.all([import("../compact/onchain-runtime-shim.js"), import("../live/ledger-shim.js")]);
@@ -212,21 +239,25 @@ export function showMenu(): Promise<Entry> {
         say(await run(mod, wallet, profile));
       } catch (e) {
         fail(e);
+      } finally {
+        lock(false);
       }
     };
     el.querySelector<HTMLButtonElement>(".join")!.onclick = () =>
       withLive("Taking a seat", async (mod, w, profile) => {
         if (!/^[0-9a-f]{64}$/i.test(address.value.trim())) throw new Error("A table address is 64 hex characters.");
         const { chain, seat, store } = await mod.joinTable(w, profile, address.value.trim());
+        pageAddress(chain.address);
         leave({ profile, mode: "live", chain, seat, store });
         return `Seat ${seat.index + 1} is yours.`;
       });
     el.querySelector<HTMLButtonElement>(".deploy")!.onclick = () =>
       withLive("Opening a table", async (mod, w, profile) => {
-        const deployed = await mod.deployTable(w, profile);
+        const deployed = await mod.deployTable(w, profile, say);
         address.value = deployed;
-        history.replaceState(null, "", `?${new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), network: w.networkId, table: deployed })}`);
-        return "The table is open. Its address is in the box and in this page's address: share it.";
+        pageAddress(deployed);
+        updateShare();
+        return "The table is open. Copy the table link for your colleagues, then take a seat.";
       });
   });
 }

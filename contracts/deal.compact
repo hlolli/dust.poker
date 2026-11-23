@@ -438,6 +438,8 @@ circuit pay_out(s: Uint<8>, amount: Uint<64>): [] {
 }
 
 circuit free_seat(s: Uint<8>): [] {
+  // The prepared keys and any preparation deadline belong to this occupant.
+  if (at_b(next_in_deal, s)) { next_prep = Prep.none; }
   seat_owner.remove(s);
   payout_address.remove(s);
   stack = set_u(stack, s, 0);

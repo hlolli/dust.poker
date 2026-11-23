@@ -57,6 +57,18 @@ test("joining verifies the locked opening even after other players have joined",
   expect(await joinOn(chain, new Seat("Alice", alice.secret), bytes(chain.me), 200n, key)).toBe(0);
 });
 
+test("two competing joins can retry as soon as the indexer shows who took the seat", async () => {
+  const chain = await LocalChain.deploy(verifierKey);
+  const payout = bytes(chain.me);
+  const bob = new Seat("Bob");
+  const competing: Chain = {
+    network: chain.network, address: chain.address, snapshot: () => chain.snapshot(),
+    submit: async () => { await joinOn(chain, new Seat("Alice"), payout); },
+  };
+  await expect(joinOn(competing, bob, payout)).rejects.toThrow("Another player took that seat first");
+  expect(await joinOn(chain, bob, payout)).toBe(1);
+});
+
 test("joining refuses a prefilled opening, unverified history, or a still mutable opening", async () => {
   const key = () => Bun.file(`${import.meta.dir}/any.verifier`).bytes();
   const chain = await LocalChain.deploy(key);
@@ -261,11 +273,19 @@ test("two Live referees play a deal through the chain, each for its own seat onl
     expect(sa.seats.filter((s) => s.name).map((s) => s.name)).toEqual(["Alice", "Seat 2"]);
     // Whoever is to act folds; the other takes the pot, and the deal is done for both clients.
     const actor = sa.toAct === 0 ? a : b;
+    const withdrawing = actor === a ? b : a;
+    withdrawing.cashOut();
+    await until(withdrawing, () => ledger(RuntimeContractState.deserialize(chain.ledgerState.index(chain.address)!.serialize()).data).leaving[withdrawing.you]!);
+    expect(withdrawing.cashOutState).toBe("waiting");
     await actor.act({ type: "fold" });
     const [da, db] = await Promise.all([until(a, (s) => s.street === "between" && s.message.includes("win")), until(b, (s) => s.street === "between" && s.message.includes("win"))]);
     expect(da.seats.map((s) => s.stack).reduce((x, y) => x + y, 0)).toBe(400);
     expect(db.message).toMatch(/win/);
     expect(chain.applied).toBeGreaterThanOrEqual(2 + 1 + 2 + 2 + 2 + 1); // joins, start, keys, shuffles, shares, the fold
+    await until(withdrawing, () => withdrawing.cashOutState === "closed");
+    actor.cashOut();
+    await until(actor, () => actor.cashOutState === "closed");
+    expect([...chain.ledgerState.index(chain.address)!.balance.values()].reduce((sum, value) => sum + value, 0n)).toBe(0n);
   } finally {
     a.stop();
     b.stop();

@@ -1,5 +1,41 @@
 import { expect, test } from "bun:test";
-import { type Change, opening, watchContract } from "./indexer.ts";
+import { type Change, checkIndexer, opening, watchContract } from "./indexer.ts";
+
+test("Live setup requires a Ledger 9 block and an acknowledged WebSocket", async () => {
+  let status = 200;
+  let protocol = 2_001_100;
+  let acknowledge = false;
+  let attempts = 0;
+  const server = Bun.serve({
+    port: 0,
+    fetch(req, server) {
+      if (req.headers.get("upgrade") === "websocket" && server.upgrade(req, { headers: { "sec-websocket-protocol": "graphql-transport-ws" } })) return;
+      return Response.json({ data: { block: { protocolVersion: protocol } } }, { status });
+    },
+    websocket: { message(ws, data) {
+      attempts++;
+      expect(JSON.parse(String(data))).toEqual({ type: "connection_init" });
+      if (acknowledge) ws.send(JSON.stringify({ type: "connection_ack" }));
+      else ws.close(4403, "denied");
+    } },
+  });
+  try {
+    const check = () => checkIndexer(server.url.href, `ws://localhost:${server.port}/ws`);
+    status = 403;
+    await expect(check()).rejects.toThrow("HTTP 403");
+    status = 200;
+    protocol = 1_000_300;
+    await expect(check()).rejects.toThrow("Ledger 9");
+    expect(attempts).toBe(0);
+    protocol = 2_001_100;
+    await expect(check()).rejects.toThrow("WebSocket");
+    acknowledge = true;
+    await check();
+    expect(attempts).toBe(2);
+  } finally {
+    server.stop(true);
+  }
+});
 
 test("opening reads the final maintenance state, falling back only to a direct deploy", async () => {
   let contract: { updates: { state: string }[]; deploys: { state: string }[] } | null = null;

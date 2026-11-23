@@ -1,0 +1,70 @@
+import { expect, test } from "bun:test";
+import { chromium } from "playwright-core";
+
+test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network and only opens a table after both indexer checks pass", async () => {
+  const dist = new URL("../../dist/", import.meta.url);
+  const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
+  const site = Bun.serve({
+    hostname: "127.0.0.1", port: 0,
+    fetch(req) {
+      const path = new URL(req.url).pathname.slice(1) || "index.html";
+      if (!/^[\w-]+[\w.-]*$/.test(path)) return new Response(null, { status: 404 });
+      return new Response(Bun.file(new URL(path, dist)));
+    },
+  });
+  try {
+    const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+    await context.addInitScript(() => {
+      window.midnight = { lace: {
+        name: "Test Lace", rdns: "test.lace", icon: "", apiVersion: "4.0.0",
+        async connect(networkId) {
+          if (networkId !== "preview") throw new Error("Network ID mismatch");
+          return {
+            getConfiguration: async () => ({ networkId, substrateNodeUri: "https://rpc.preview.midnight.network", indexerUri: "https://blockfrost.lw.iog.io/midnight-preview/", indexerWsUri: "wss://blockfrost.lw.iog.io/midnight-preview/ws" }),
+            getUnshieldedAddress: async () => ({ unshieldedAddress: "mn_addr_preview1pvc9275lcn5suv6c0k3v0mq3xedcpfw2au2rjh5r4rxly9euvxrq6nhvej" }),
+            getDustBalance: async () => ({ balance: 0n, cap: 0n }),
+            getProvingProvider: async () => { throw new Error("unexpected proof"); },
+            balanceUnsealedTransaction: async () => { throw new Error("unexpected balance"); },
+            submitTransaction: async () => { throw new Error("unexpected submission"); },
+          };
+        },
+      } };
+    });
+    const page = await context.newPage();
+    await page.route("https://fonts.googleapis.com/**", route => route.fulfill({ contentType: "text/css", body: "" }));
+    const indexer = "indexer.preview.midnight.network/api/v4/graphql";
+    let status = 403;
+    let allowSocket = false;
+    await page.route(`https://${indexer}`, route => route.fulfill({ status, json: { data: { block: { protocolVersion: 2_001_100 } } } }));
+    await page.routeWebSocket(`wss://${indexer}/ws`, ws => ws.onMessage(() => {
+      if (allowSocket) ws.send('{"type":"connection_ack"}');
+      else ws.close({ code: 4403, reason: "denied" });
+    }));
+    const invite = `${site.url.href}?network=preview&table=${"ab".repeat(32)}`;
+    await page.goto(invite + "&fx=off", { waitUntil: "domcontentloaded" });
+    const connect = page.getByRole("button", { name: "Connect Lace" });
+    const join = page.getByRole("button", { name: "Take a seat" });
+    await connect.click();
+    await page.getByRole("status").filter({ hasText: "HTTP 403" }).waitFor();
+    expect(await join.isVisible()).toBe(false);
+    status = 200;
+    await connect.click();
+    await page.getByRole("status").filter({ hasText: "WebSocket" }).waitFor();
+    expect(await join.isVisible()).toBe(false);
+    allowSocket = true;
+    await connect.click();
+    await join.waitFor();
+    await page.getByText("Lace reported zero tDUST at connection.", { exact: false }).waitFor();
+    await page.getByRole("button", { name: "Copy table link" }).click();
+    await page.getByRole("status").filter({ hasText: "link copied" }).waitFor();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(invite);
+    await page.locator("label").filter({ hasText: "preprod" }).click();
+    expect(await page.getByLabel("Table address").inputValue()).toBe("");
+    await connect.click();
+    await page.getByRole("status").filter({ hasText: "Switch Test Lace to preprod" }).waitFor();
+    expect(await join.isVisible()).toBe(false);
+  } finally {
+    await browser.close();
+    site.stop(true);
+  }
+}, 60_000);

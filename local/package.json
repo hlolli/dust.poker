@@ -8,6 +8,6 @@
   },
   "dependencies": {
     "@midnightntwrk/ledger-v9": "1.0.2",
-    "@midnightntwrk/wallet-sdk": "2.0.0"
+    "@midnightntwrk/wallet-sdk": "2.0.1"
   }
 }

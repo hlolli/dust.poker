@@ -15,7 +15,7 @@ export const config = {
   indexerWsUri: "ws://127.0.0.1:8088/api/v4/graphql/ws",
 };
 // The site reads its key location off the page; here the keys are files.
-Object.assign(globalThis, { location: { search: `?keys=file://${root}/contracts/build/deal` } });
+Object.assign(globalThis, { location: { hostname: "localhost", search: `?keys=file://${root}/contracts/build/deal` } });
 
 const { decodeAddress } = await import(`${root}/src/live/wallet.ts`);
 export type Wallet = import("../src/live/wallet.ts").Wallet;

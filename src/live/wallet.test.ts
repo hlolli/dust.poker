@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { connect, decodeAddress, type InitialAPI } from "./wallet.ts";
+import { connect, decodeAddress, liveConfiguration, type InitialAPI } from "./wallet.ts";
 
 // Vectors made with the bech32 reference library (bitcoinjs/bech32 2.0.0), the same encoding
 // @midnightntwrk/wallet-sdk-address-format produces: hrp mn_addr_<network>, 32 bytes, no length limit.
@@ -7,6 +7,22 @@ const bytes = "0b30557a9fc4e90e33587da2c7ec11365b80a5caef14395e83a8cdf2173c6186"
 const preview = "mn_addr_preview1pvc9275lcn5suv6c0k3v0mq3xedcpfw2au2rjh5r4rxly9euvxrq6nhvej";
 const mainnet = "mn_addr1pvc9275lcn5suv6c0k3v0mq3xedcpfw2au2rjh5r4rxly9euvxrqpxawfc";
 const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+
+test("retired Preview reads use the public indexer, and a retired wallet node requires reconfiguration", () => {
+  const proxy = "blockfrost.lw.iog.io/midnight-preview/";
+  const config = { networkId: "preview", substrateNodeUri: "https://rpc.preview.midnight.network", indexerUri: `https://${proxy}`, indexerWsUri: `wss://${proxy}ws` };
+  expect(liveConfiguration(config)).toEqual({ ...config, indexerUri: "https://indexer.preview.midnight.network/api/v4/graphql", indexerWsUri: "wss://indexer.preview.midnight.network/api/v4/graphql/ws" });
+  expect(() => liveConfiguration({ ...config, substrateNodeUri: `https://${proxy}` })).toThrow("node has retired");
+});
+
+test("Preprod keeps authenticated and custom providers and explains a missing token before dealing", () => {
+  const config = { networkId: "preprod", substrateNodeUri: "https://node.example", indexerUri: "https://midnight-preprod.blockfrost.io/api/v0?project_id=test", indexerWsUri: "wss://midnight-preprod.blockfrost.io/api/v0/ws?project_id=test" };
+  expect(liveConfiguration(config)).toBe(config);
+  expect(() => liveConfiguration({ ...config, indexerWsUri: config.indexerWsUri.split("?")[0]! })).toThrow("project ID");
+  expect(() => liveConfiguration({ ...config, indexerUri: "https://indexer.preprod.midnight.network/api/v4/graphql" })).toThrow("has retired");
+  const privateConfig = { ...config, indexerUri: "https://example.org/graphql", indexerWsUri: "wss://example.org/graphql/ws" };
+  expect(liveConfiguration(privateConfig)).toBe(privateConfig);
+});
 
 test("an unsupported network is refused before opening the wallet", async () => {
   let connections = 0;

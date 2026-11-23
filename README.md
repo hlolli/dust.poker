@@ -16,9 +16,20 @@ bun run check  # compile contracts + typecheck + test + build
 
 ## Live on Ledger 9
 
-The Live table supports Preview and Preprod with Lace's DApp Connector API 4.x. Choose the
-network in the menu, then deploy a table or join one by its address. Use a funded test wallet
-with its tNIGHT registered for DUST generation so it can pay transaction fees.
+### Play with colleagues
+
+1. Each player needs their own browser profile and Ledger 9 compatible Lace wallet on the same network. Start with [Preview](https://dust.poker/?network=preview), which has a public indexer. In Lace's Midnight settings, select a prover that runs on your own device, either the in-process prover if available or a running local Ledger 9 proof server.
+2. If Lace shows the retired `blockfrost.lw.iog.io` proxy, set the node and indexer for your network as shown below. Wait for Lace to sync. For Preprod, substitute your own Midnight Preprod project token in both URLs. Lace derives the WebSocket indexer URL from the HTTP URL. [Midnight network endpoints](https://docs.midnight.network/relnotes/network)
+3. Request tNIGHT at your unshielded address, select **Generate tDUST** in Lace, and wait for tDUST to accrue. Each seat puts 200 STAR into play and posts a 200 STAR bond. Hosting and playing require tDUST for multiple transaction fees. [Wallet funding guide and faucets](https://docs.midnight.network/guides/acquire-tokens)
+4. At dust.poker, create a player profile, select the wallet's network and choose **Connect Lace**. One player chooses **Open a new table** and approves each deployment transaction. Once the table opens, choose **Copy table link** and send it to the group. Everyone, including the host, chooses **Take a seat**. The first hand starts when two players are seated.
+5. Keep the tab open and approve the wallet prompts during the hand. To withdraw your remaining stack and bond, choose **Cash out**, finish any hand you are in, and approve the withdrawal. Wait for **Seat closed** and check the payout in Lace. **Back to menu** leaves your funds at the table.
+
+| Lace setting | Preview | Preprod |
+| --- | --- | --- |
+| Node | `https://rpc.preview.midnight.network` | `https://rpc.midnight-preprod.blockfrost.io?project_id=YOUR_TOKEN` |
+| Indexer | `https://indexer.preview.midnight.network/api/v4/graphql` | `https://midnight-preprod.blockfrost.io/api/v0?project_id=YOUR_TOKEN` |
+
+### Build the Live contract
 
 The contract uses Compact 0.36.1, Compact runtime 0.21, on-chain runtime v4, Ledger v9, and
 the released ZKIR v3 prover. Versions are pinned in `package.json` and `bun.lock`.
@@ -45,7 +56,7 @@ and withdrawal. `bun run live:check` runs the same integration check locally.
 ## A Midnight network on your machine
 
 For development, `local/compose.yml` runs the released Ledger 9 stack on the "undeployed"
-network: node 2.1.101, indexer 4.4.101, and proof server 9.0.0. Their ports bind to localhost.
+network: node 2.1.101, indexer 4.4.101, and proof server 9.0.2. Their ports bind to localhost.
 
 ```
 docker compose -f local/compose.yml up -d

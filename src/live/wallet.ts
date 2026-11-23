@@ -31,7 +31,8 @@ export type ProvingProvider = {
 export type ConnectedAPI = {
   /** Bech32m, mn_addr_<network>1... (mainnet: mn_addr1...). */
   getUnshieldedAddress(): Promise<{ unshieldedAddress: string }>;
-  /** The indexer and node the wallet talks to; the game uses the same ones. */
+  getDustBalance?(): Promise<{ balance: bigint; cap: bigint }>;
+  /** The indexer and node configured by the wallet. */
   getConfiguration(): Promise<Configuration>;
   /** Takes a proven, unbound transaction (hex), adds the inputs it is short of and the fee, signs. */
   balanceUnsealedTransaction(tx: string, options?: { payFees?: boolean }): Promise<{ tx: string }>;
@@ -62,20 +63,48 @@ export type Wallet = {
  * The networks a Live table can be on: Midnight's public test networks, and on a development
  * machine the local one (local/README). Mainnet waits until real money has been worked out.
  */
-export const NETWORKS = ["preview", "preprod", ...(["localhost", "127.0.0.1"].includes(globalThis.location?.hostname ?? "") ? ["undeployed"] : [])];
+export const isLocalSite = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1";
+export const NETWORKS = ["preview", "preprod", ...(isLocalSite(globalThis.location?.hostname ?? "") ? ["undeployed"] : [])];
 
 /** The network the page asks the wallet for first: `?network=<id>` (a shared table's link carries it), or Preview. */
 export const network = () => new URLSearchParams(location.search).get("network") ?? NETWORKS[0]!;
 
 /** Wallets in this browser that speak connector API 4.x. */
-export const installed = (): InitialAPI[] => Object.values(window.midnight ?? {}).filter((w) => w.apiVersion.startsWith("4."));
+export const installed = (): InitialAPI[] => Object.values(window.midnight ?? {}).filter((w) => w?.apiVersion?.startsWith("4.") && typeof w.connect === "function");
+
+/** Keep private/custom providers. Only replace known retired public endpoints. */
+export function liveConfiguration(config: Configuration): Configuration {
+  if (config.networkId !== "preview" && config.networkId !== "preprod") return config;
+  const preprod = config.networkId === "preprod";
+  const retired = (url: URL) => url.hostname === "blockfrost.lw.iog.io" ||
+    (preprod && ["rpc.preprod.midnight.network", "indexer.preprod.midnight.network"].includes(url.hostname));
+  const node = new URL(config.substrateNodeUri);
+  const indexer = new URL(config.indexerUri);
+  const ws = new URL(config.indexerWsUri);
+  if (retired(node)) throw new Error(`The wallet's ${config.networkId} node has retired. Update the node and indexer in Lace using Wallet setup, then reconnect.`);
+  if (preprod) {
+    if ([indexer, ws].some(retired)) throw new Error("The Preprod indexer has retired. Set the Blockfrost Preprod indexer and project ID in Lace, then reconnect.");
+    if ([node, indexer, ws].some(url => ["midnight-preprod.blockfrost.io", "rpc.midnight-preprod.blockfrost.io"].includes(url.hostname) && !url.searchParams.get("project_id"))) {
+      throw new Error("The Blockfrost Preprod endpoint needs a Midnight Preprod project ID. Add it in Lace, then reconnect.");
+    }
+  } else if ([indexer, ws].some(retired)) {
+    const endpoint = "indexer.preview.midnight.network/api/v4/graphql";
+    return { ...config, indexerUri: `https://${endpoint}`, indexerWsUri: `wss://${endpoint}/ws` };
+  }
+  return config;
+}
 
 /** Connects, and checks the wallet is on the network asked for. */
 export async function connect(wallet: InitialAPI, networkId = network()): Promise<Wallet> {
   if (!NETWORKS.includes(networkId)) throw new Error(`unsupported Live network: ${networkId}; choose ${NETWORKS.join(" or ")}`);
   const api = await wallet.connect(networkId);
-  const [config, { unshieldedAddress }] = await Promise.all([api.getConfiguration(), api.getUnshieldedAddress()]);
-  if (config.networkId !== networkId) throw new Error(`the wallet is on ${config.networkId}, not ${networkId}`);
+  const settings = await api.getConfiguration();
+  if (settings.networkId !== networkId) throw new Error(`the wallet is on ${settings.networkId}, not ${networkId}`);
+  const config = liveConfiguration(settings);
+  if (typeof api.getProvingProvider !== "function" || typeof api.balanceUnsealedTransaction !== "function" || typeof api.submitTransaction !== "function") {
+    throw new Error("Update Lace to a Ledger 9 version with proving and transaction submission.");
+  }
+  const { unshieldedAddress } = await api.getUnshieldedAddress();
   const { kind, network: addressNetwork, bytes } = decodeAddress(unshieldedAddress);
   if (kind !== "addr" || bytes.length !== 32 || addressNetwork !== networkId) throw new Error(`not an unshielded ${networkId} address: ${unshieldedAddress}`);
   return { name: wallet.name, networkId, address: unshieldedAddress, payout: bytes, config, api };

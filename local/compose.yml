@@ -33,7 +33,7 @@ services:
       start_period: 20s
 
   proof-server:
-    image: midnightntwrk/proof-server:9.0.0
+    image: midnightntwrk/proof-server:9.0.2
     container_name: dust-proof-server
     command: ["midnight-proof-server"]
     ports:

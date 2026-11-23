@@ -44,6 +44,8 @@ export class LiveReferee implements Referee {
   private doneSince = 0;
   /** A step sent and not yet seen on the chain, and when it was sent. */
   private pending: { step: Step; at: number } | null = null;
+  private signing: Promise<void> | null = null;
+  private withdrawing = false;
   /** The last step sent, by what it was for, and when: the same step is not sent again within `retry`. */
   private lastSent: { key: string; at: number } | null = null;
   private listeners = new Set<(s: TableState) => void>();
@@ -74,6 +76,19 @@ export class LiveReferee implements Referee {
     return this.seat.index;
   }
 
+  get cashOutState(): "loading" | "ready" | "waiting" | "closed" {
+    if (!this.l) return "loading";
+    if (seatOf(this.l, this.seat.secret) !== this.you) return "closed";
+    return this.withdrawing ? "waiting" : "ready";
+  }
+
+  cashOut() {
+    if (this.cashOutState !== "ready") return;
+    this.withdrawing = true;
+    this.publish();
+    void this.tick();
+  }
+
   start() {
     this.stopped = false;
     this.unwatch = this.chain.watch?.((snap) => {
@@ -98,22 +113,30 @@ export class LiveReferee implements Referee {
   }
 
   async act(action: Action) {
+    const turn = this.l;
+    while (this.signing) await this.signing;
     const l = this.l;
     if (!l || l.phase !== Phase.playing || Number(l.to_act) !== this.you) throw new Error("not your turn");
+    if (!turn || turn.deal_no !== l.deal_no || turn.street !== l.street || turn.current_bet !== l.current_bet) throw new Error("The bet changed. Choose your action again.");
     const { step, note } = actionStep(l, this.you, action);
     this.lastAction[this.you] = note;
     await this.send(step);
   }
 
   async show() {
-    if (!this.l || !canShow(this.l, this.you)) throw new Error("nothing to show");
+    const deal = this.l?.deal_no;
+    while (this.signing) await this.signing;
+    if (!this.l || this.l.deal_no !== deal || !canShow(this.l, this.you)) throw new Error("nothing to show");
     await this.send({ circuit: "show", args: [BigInt(this.you)] });
   }
 
   /** One transaction: the circuit run against the last snapshot, proven and submitted through the chain. */
   private async send(step: Step) {
     if (!this.snap) throw new Error("the chain has not answered yet");
+    if (this.signing) throw new Error("A wallet transaction is already in progress");
     const key = this.situation(step);
+    const signed = Promise.withResolvers<void>();
+    this.signing = signed.promise;
     this.pending = { step, at: Date.now() };
     this.publish();
     try {
@@ -122,7 +145,12 @@ export class LiveReferee implements Referee {
       this.lastSent = { key, at: Date.now() }; // accepted by the chain; a refusal is retried at once
     } catch (e) {
       this.pending = null;
+      this.message = reason(e);
       throw e;
+    } finally {
+      this.signing = null;
+      signed.resolve();
+      if (!this.pending) this.publish();
     }
   }
 
@@ -206,7 +234,7 @@ export class LiveReferee implements Referee {
 
   private async step() {
     const l = this.l;
-    if (!l || !this.snap) return;
+    if (!l || !this.snap || this.signing) return;
     if (this.pending) {
       if (Date.now() - this.pending.at < this.retry) return; // wait for the chain to show it
       this.pending = null;
@@ -229,6 +257,21 @@ export class LiveReferee implements Referee {
       const { step, note } = actionStep(l, this.you, legal(l, this.you).check ? { type: "check" } : { type: "fold" });
       this.lastAction[this.you] = note;
       return void (await this.sendOnce(step));
+    }
+    if (this.withdrawing) {
+      const seat = BigInt(this.you);
+      const canLeave = over || !l.in_deal[this.you];
+      // Leave directly when the contract allows it. Otherwise reserve the next hand
+      // off with stand_up and keep playing every required step until this one ends.
+      if (canLeave || (!l.leaving[this.you] && !step && !(l.phase === Phase.playing && Number(l.to_act) === this.you))) {
+        try {
+          await this.sendOnce(canLeave ? { circuit: "leave", args: [seat] } : { circuit: "stand_up", args: [seat, true] });
+        } catch (error) {
+          this.withdrawing = false;
+          throw error;
+        }
+        return;
+      }
     }
     if (step) return void (await this.sendOnce(step));
     // Between deals: the lowest seat with chips starts the next one, after a pause.
@@ -263,7 +306,7 @@ export class LiveReferee implements Referee {
     if (!this.l) return { ...emptyTable(this.names, this.you), message: this.message || "Reading the table" };
     const table = tableFrom(this.l, { names: this.names, you: this.you, x: this.seat.x, lastAction: this.lastAction, message: this.message, winners: this.winners });
     // While a step of ours is on its way, the rail waits; the clock is the contract's.
-    if (this.pending) return { ...table, legal: null, canShow: false, message: this.message || "Sending" };
+    if (this.pending || this.signing) return { ...table, legal: null, canShow: false, message: this.message || "Sending" };
     return table;
   }
 }
