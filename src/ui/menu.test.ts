@@ -4,7 +4,7 @@ import { chromium } from "playwright-core";
 function serveSite() {
   const dist = new URL("../../dist/", import.meta.url);
   return Bun.serve({
-    hostname: "127.0.0.1", port: 0,
+    hostname: "127.0.0.1", port: 0, idleTimeout: 60,
     fetch(req) {
       const path = new URL(req.url).pathname.slice(1) || "index.html";
       if (!/^(?:club\/)?[\w-]+[\w.-]*$/.test(path)) return new Response(null, { status: 404 });
@@ -93,12 +93,12 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
   }
 }, 60_000);
 
-test.skipIf(!process.env.POKER_BROWSER_TEST)("the character preview resizes only when its layout changes at fractional pixel density", async () => {
+test.skipIf(!process.env.POKER_BROWSER_TEST)("the creator resizes its preview on layout changes and opens a first Practice game", async () => {
   const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
   const site = serveSite();
   try {
     const page = await browser.newPage({ deviceScaleFactor: 1.25 });
-    await page.goto(site.url.href, { waitUntil: "domcontentloaded" });
+    await page.goto(new URL("?fx=off", site.url).href, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "+ your name", exact: true }).click();
     const changes = await page.locator(".creator canvas").evaluate(async (canvas: HTMLCanvasElement) => {
       const frame = () => new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
