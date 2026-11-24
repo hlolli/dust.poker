@@ -7,7 +7,8 @@
 // Uses the released ZKIR v3 prover and keys from compact:build --zk.
 import { parseArgs } from "node:util";
 import * as zkir from "@midnightntwrk/zkir-v3";
-import { CALL, CIRCUITS, type Circuit, keyMaterial, Phase, RAISE, seatsOf, Table } from "../contracts/harness.ts";
+import { CIRCUITS, type Circuit, keyMaterial, Phase, Table } from "../contracts/harness.ts";
+import { playProofShowdown } from "./proof-showdown.ts";
 
 const root = `${import.meta.dir}/..`;
 const { values: args } = parseArgs({
@@ -22,24 +23,10 @@ const collect = (t: Table) => {
   for (const [c, p] of t.preimages) if (!preimages.has(c)) preimages.set(c, p);
 };
 
-// A heads-up deal to showdown, with the next deck prepared alongside; then a buy-in and a leave.
+// A heads-up showdown with the next deck prepared alongside, then a withdrawal and buy-in.
 {
   const t = await Table.seated(2);
-  await t.dealt();
-  await t.prepare();
-  await t.checkAndRelease(); // preflop call and check, the flop released
-  const l = t.ledger;
-  const s = Number(l.to_act);
-  await t.call(s, "act_out", BigInt(s), RAISE, l.bet[s]! + l.stack[s]!); // shoves
-  const o = Number(t.ledger.to_act);
-  await t.call(o, "act_out", BigInt(o), CALL, 0n); // called: everyone all in
-  await t.tableAll();
-  await t.showAll();
-  await t.call(0, "settle");
-  const broke = seatsOf(t.ledger).find((i) => t.ledger.stack[i] === 0n)!;
-  await t.call(broke, "buy_in", BigInt(broke), 200n);
-  await t.call(1 - broke, "stand_up", BigInt(1 - broke), true);
-  await t.call(1 - broke, "leave", BigInt(1 - broke));
+  await playProofShowdown(t);
   collect(t);
 }
 
