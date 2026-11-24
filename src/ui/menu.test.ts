@@ -1,11 +1,7 @@
 import { expect, test } from "bun:test";
+import { $ } from "bun";
 import { chromium } from "playwright-core";
-import { LedgerParameters } from "@midnightntwrk/ledger-v9";
 import { serveSite } from "../../scripts/browser-test-site.ts";
-import { LocalChain } from "../live/local.ts";
-import { joinOn } from "../live/live.ts";
-import { bytes, hex } from "../live/ledger.ts";
-import { Seat } from "../referee/contract.ts";
 import { tableLink } from "./table-invite.ts";
 
 test("a copied invite carries only the table and its network", () => {
@@ -35,8 +31,10 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("the field guides work on mobile wi
 }, 30_000);
 
 test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network and only opens a table after both indexer checks pass", async () => {
+  const fixture = new URL("../../scripts/invite-lobby-fixture.ts", import.meta.url);
+  const { address, state, opened, ledgerParameters } = await $`bun ${fixture.pathname}`.json() as Record<"address" | "state" | "opened" | "ledgerParameters", string>;
   const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
-  const site = serveSite();
+  const site = serveSite(Bun.file(new URL("../live/any.verifier", import.meta.url)));
   try {
     const context = await browser.newContext({ viewport: { width: 520, height: 540 }, permissions: ["clipboard-read", "clipboard-write"] });
     await context.addInitScript(() => {
@@ -57,25 +55,20 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     });
     const page = await context.newPage();
     page.setDefaultTimeout(30_000);
+    page.on("pageerror", error => console.error("Invite page:", error.message));
     const indexer = "indexer.preview.midnight.network/api/v4/graphql";
     let status = 200;
     let allowSocket = false;
-    const ledgerParameters = Buffer.from(LedgerParameters.initialParameters().serialize()).toString("hex");
-    const key = await Bun.file(new URL("../live/any.verifier", import.meta.url)).bytes();
-    const chain = await LocalChain.deploy(async () => key);
-    await joinOn(chain, new Seat("Alice", 7n), bytes(chain.me));
-    const state = hex((await chain.snapshot()).state!.serialize());
-    const opened = hex((await chain.opening()).serialize());
-    await page.route("**/deal/keys/*.verifier", route => route.fulfill({ body: Buffer.from(key) }));
     await page.route(`https://${indexer}`, route => {
-      const isTable = route.request().postDataJSON().variables?.address === chain.address;
+      const isTable = route.request().postDataJSON().variables?.address === address;
       return route.fulfill({ status, json: { data: { block: { protocolVersion: 2_001_100, height: 3, hash: "01".repeat(32), timestamp: Date.now(), ledgerParameters }, contractAction: isTable ? { state } : null, contract: isTable ? { updates: [{ state: opened }], deploys: [] } : null } } });
     });
-    await page.routeWebSocket(`wss://${indexer}/ws`, ws => ws.onMessage(() => {
+    await page.routeWebSocket(`wss://${indexer}/ws`, ws => ws.onMessage(message => {
+      if (JSON.parse(message.toString()).type !== "connection_init") return;
       if (allowSocket) ws.send('{"type":"connection_ack"}');
       else ws.close({ code: 4403, reason: "denied" });
     }));
-    const invite = `${site.url.href}?network=preview&table=${chain.address}`;
+    const invite = `${site.url.href}?network=preview&table=${address}`;
     await page.goto(invite + "&fx=off", { waitUntil: "domcontentloaded" });
     const connect = page.getByRole("button", { name: "Connect Lace" });
     const join = page.getByRole("button", { name: "Join table" });
@@ -119,7 +112,7 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     await page.getByRole("button", { name: "Open the public queue" }).waitFor();
     await page.locator("#live-table summary").filter({ hasText: "Play with friends" }).click();
     expect(await page.getByLabel("Table address").isVisible()).toBe(true);
-    await page.getByLabel("Table address").fill(chain.address);
+    await page.getByLabel("Table address").fill(address);
     await page.getByRole("button", { name: "View table" }).click();
     await page.getByText("Alice (you)").waitFor();
     expect(await page.locator("body > canvas").count()).toBe(0);
@@ -127,6 +120,9 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     await page.getByRole("button", { name: "Back to lobby" }).waitFor();
     await page.getByRole("button", { name: "Copy invite link" }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(invite);
+    await page.getByRole("button", { name: "Back to lobby" }).click();
+    await page.getByText("Alice (you)").waitFor();
+    expect(await page.locator("body > canvas").count()).toBe(0);
   } finally {
     await browser.close();
     site.stop(true);
