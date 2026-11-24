@@ -65,6 +65,7 @@ export type Wallet = {
  */
 export const isLocalSite = (hostname: string) => hostname === "localhost" || hostname === "127.0.0.1";
 export const NETWORKS = ["preview", "preprod", ...(isLocalSite(globalThis.location?.hostname ?? "") ? ["undeployed"] : [])];
+export const PREVIEW_INDEXER = "https://indexer.preview.midnight.network/api/v4/graphql";
 
 /** The network the page asks the wallet for first: `?network=<id>` (a shared table's link carries it), or Preview. */
 export const network = () => new URLSearchParams(location.search).get("network") ?? NETWORKS[0]!;
@@ -88,8 +89,7 @@ export function liveConfiguration(config: Configuration): Configuration {
       throw new Error("The Blockfrost Preprod endpoint needs a Midnight Preprod project ID. Add it in Lace, then reconnect.");
     }
   } else if ([indexer, ws].some(retired)) {
-    const endpoint = "indexer.preview.midnight.network/api/v4/graphql";
-    return { ...config, indexerUri: `https://${endpoint}`, indexerWsUri: `wss://${endpoint}/ws` };
+    return { ...config, indexerUri: PREVIEW_INDEXER, indexerWsUri: PREVIEW_INDEXER.replace("https:", "wss:") + "/ws" };
   }
   return config;
 }

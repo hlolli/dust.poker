@@ -26,6 +26,7 @@ import { ActionBar } from "./ui/actions.ts";
 import { HandPanel } from "./ui/hand.ts";
 import type { Profile } from "./ui/profiles.ts";
 import type { Entry } from "./ui/menu.ts";
+import { inviteCopy } from "./ui/table-invite.ts";
 
 /** How much higher than the others you hold your cards: toward the eyes the camera sits in. */
 const LIFT = 0.05;
@@ -209,8 +210,8 @@ export async function enterRoom(entry: Entry) {
   const leave = document.createElement("button");
   leave.className = "leave";
   leave.type = "button";
-  leave.textContent = entry.mode === "live" ? "Back to menu" : "Leave table";
-  leave.title = entry.mode === "live" ? "Back to the menu. Your seat and chips stay yours at the table; take a seat again to come back." : "Back to the menu";
+  leave.textContent = entry.mode === "live" ? (entry.access === "invite" ? "Back to lobby" : "Back to menu") : "Leave table";
+  leave.title = entry.mode === "live" ? "Your chips stay at the table. Return with the same profile to play or cash out." : "Back to the menu";
   leave.onclick = () => {
     // On a Live table your client does your steps in a deal; gone, it misses them, and a missed
     // step past its deadline can cost your bond (ADR 0006). Between deals nothing is owed.
@@ -221,6 +222,7 @@ export async function enterRoom(entry: Entry) {
   const tableControls = document.createElement("div");
   tableControls.className = "table-controls";
   tableControls.append(leave);
+  if (entry.mode === "live" && entry.access === "invite") tableControls.append(inviteCopy(entry.chain.network, entry.chain.address));
   document.body.append(tableControls);
 
   // The entrance: a timeline from the moment your character has loaded. Walk to the side of

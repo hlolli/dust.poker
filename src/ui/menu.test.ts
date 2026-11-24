@@ -2,6 +2,16 @@ import { expect, test } from "bun:test";
 import { chromium } from "playwright-core";
 import { LedgerParameters } from "@midnightntwrk/ledger-v9";
 import { serveSite } from "../../scripts/browser-test-site.ts";
+import { LocalChain } from "../live/local.ts";
+import { joinOn } from "../live/live.ts";
+import { bytes, hex } from "../live/ledger.ts";
+import { Seat } from "../referee/contract.ts";
+import { tableLink } from "./table-invite.ts";
+
+test("a copied invite carries only the table and its network", () => {
+  expect(tableLink("preview", "AB".repeat(32), "https://user:pass@example.test/poker?wallet=private&keys=local#tables"))
+    .toBe(`https://example.test/poker?network=preview&table=${"ab".repeat(32)}`);
+});
 
 test.skipIf(!process.env.POKER_BROWSER_TEST)("the field guides work on mobile without a wallet or JavaScript", async () => {
   const browser = await chromium.launch({ channel: "chrome" });
@@ -28,7 +38,7 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
   const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
   const site = serveSite();
   try {
-    const context = await browser.newContext({ permissions: ["clipboard-read", "clipboard-write"] });
+    const context = await browser.newContext({ viewport: { width: 520, height: 540 }, permissions: ["clipboard-read", "clipboard-write"] });
     await context.addInitScript(() => {
       window.midnight = { lace: {
         name: "Test Lace", rdns: "test.lace", icon: "", apiVersion: "4.0.0",
@@ -46,33 +56,54 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
       } };
     });
     const page = await context.newPage();
+    page.setDefaultTimeout(30_000);
     const indexer = "indexer.preview.midnight.network/api/v4/graphql";
-    let status = 403;
+    let status = 200;
     let allowSocket = false;
     const ledgerParameters = Buffer.from(LedgerParameters.initialParameters().serialize()).toString("hex");
-    await page.route(`https://${indexer}`, route => route.fulfill({ status, json: { data: { block: { protocolVersion: 2_001_100, height: 3, hash: "01".repeat(32), timestamp: Date.now(), ledgerParameters }, contractAction: null } } }));
+    const key = await Bun.file(new URL("../live/any.verifier", import.meta.url)).bytes();
+    const chain = await LocalChain.deploy(async () => key);
+    await joinOn(chain, new Seat("Alice", 7n), bytes(chain.me));
+    const state = hex((await chain.snapshot()).state!.serialize());
+    const opened = hex((await chain.opening()).serialize());
+    await page.route("**/deal/keys/*.verifier", route => route.fulfill({ body: Buffer.from(key) }));
+    await page.route(`https://${indexer}`, route => {
+      const isTable = route.request().postDataJSON().variables?.address === chain.address;
+      return route.fulfill({ status, json: { data: { block: { protocolVersion: 2_001_100, height: 3, hash: "01".repeat(32), timestamp: Date.now(), ledgerParameters }, contractAction: isTable ? { state } : null, contract: isTable ? { updates: [{ state: opened }], deploys: [] } : null } } });
+    });
     await page.routeWebSocket(`wss://${indexer}/ws`, ws => ws.onMessage(() => {
       if (allowSocket) ws.send('{"type":"connection_ack"}');
       else ws.close({ code: 4403, reason: "denied" });
     }));
-    const invite = `${site.url.href}?network=preview&table=${"ab".repeat(32)}`;
+    const invite = `${site.url.href}?network=preview&table=${chain.address}`;
     await page.goto(invite + "&fx=off", { waitUntil: "domcontentloaded" });
     const connect = page.getByRole("button", { name: "Connect Lace" });
-    const join = page.getByRole("button", { name: "Take a seat" });
+    const join = page.getByRole("button", { name: "Join table" });
+    await page.getByRole("heading", { name: "Table invitation" }).waitFor();
+    await page.getByText("1 of 6 seated").waitFor();
+    expect(await join.isDisabled()).toBe(true);
+    expect(await page.locator("body > canvas").count()).toBe(0);
+    status = 403;
     await connect.click();
     await page.getByRole("status").filter({ hasText: "HTTP 403" }).waitFor();
-    expect(await join.isVisible()).toBe(false);
+    expect(await join.isDisabled()).toBe(true);
     status = 200;
     await connect.click();
     await page.getByRole("status").filter({ hasText: "WebSocket" }).waitFor();
-    expect(await join.isVisible()).toBe(false);
+    expect(await join.isDisabled()).toBe(true);
     allowSocket = true;
     await connect.click();
-    await join.waitFor();
+    await page.getByText("1 of 6 seated").waitFor();
+    expect(await page.getByRole("list", { name: "Table seats" }).getByText(/^Player [0-9a-f]{8}$/).count()).toBe(1);
+    expect(await page.locator("body > canvas").count()).toBe(0);
     await page.getByText("Lace reported zero tDUST at connection.", { exact: false }).waitFor();
-    await page.getByRole("button", { name: "Copy table link" }).click();
+    await page.getByRole("button", { name: "Copy invite link" }).click();
     await page.getByRole("status").filter({ hasText: "link copied" }).waitFor();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(invite);
+    await page.evaluate(() => { Object.defineProperty(navigator, "clipboard", { value: { writeText: async () => { throw new Error("denied"); } } }); });
+    await page.getByRole("button", { name: "Copy invite link" }).click();
+    expect(await page.getByRole("textbox", { name: "Table invite link" }).inputValue()).toBe(invite);
+    await page.getByRole("link", { name: "All tables" }).click();
     await page.locator("label").filter({ hasText: "preprod" }).click();
     expect(await page.getByLabel("Table address").inputValue()).toBe("");
     await connect.click();
@@ -88,8 +119,16 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     await page.getByRole("button", { name: "Open the public queue" }).waitFor();
     await page.locator("#live-table summary").filter({ hasText: "Play with friends" }).click();
     expect(await page.getByLabel("Table address").isVisible()).toBe(true);
+    await page.getByLabel("Table address").fill(chain.address);
+    await page.getByRole("button", { name: "View table" }).click();
+    await page.getByText("Alice (you)").waitFor();
+    expect(await page.locator("body > canvas").count()).toBe(0);
+    await join.click();
+    await page.getByRole("button", { name: "Back to lobby" }).waitFor();
+    await page.getByRole("button", { name: "Copy invite link" }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(invite);
   } finally {
     await browser.close();
     site.stop(true);
   }
-}, 60_000);
+}, 90_000);

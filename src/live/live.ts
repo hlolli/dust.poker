@@ -70,6 +70,19 @@ export async function submitPublicCall(chain: Chain, what: string, build: (snap:
  * the address is handed back once the last part has locked the circuits.
  */
 export const publicPlayerKey = (secret: bigint) => hex(persistentHash(CompactTypeJubjubPoint, ecMulGenerator(secret)));
+
+/** Read-only seating information. Joining still authenticates the keys and the opening in joinOn. */
+export function inviteSeats(serialized: string): (string | null)[] {
+  const state = L.ContractState.deserialize(bytes(serialized));
+  const ops = state.operations();
+  if (ops.includes("claim_seat")) throw new Error("This table seats players through the public draw.");
+  const authority = state.maintenanceAuthority;
+  if (ops.length !== CIRCUITS.length || !CIRCUITS.every(name => ops.includes(name)) || authority.committee.length || !authority.threshold)
+    throw new Error("This address does not contain an open invitation table.");
+  const { seat_owner } = ledger(RuntimeContractState.deserialize(state.serialize()).data);
+  return Array.from({ length: 6 }, (_, i) => seat_owner.member(BigInt(i))
+    ? hex(persistentHash(CompactTypeJubjubPoint, seat_owner.lookup(BigInt(i)))) : null);
+}
 export const PUBLIC_CIRCUITS = CIRCUITS.map(name => name === "join" ? "claim_seat" : name);
 
 export async function tableOpening(seat: Seat, roster?: readonly string[]) {
@@ -154,7 +167,7 @@ export async function joinOn(chain: Chain, seat: Seat, payout: Uint8Array, buy =
       seat.index = held;
       return true;
     }
-    if (l.seat_owner.member(proposed)) throw new Error("Another player took that seat first. Choose Take a seat again for the next available seat.");
+    if (l.seat_owner.member(proposed)) throw new Error("Another player took that seat first. Choose Join table again for the next open seat.");
     return false;
   }, "the join");
   return seat.index;

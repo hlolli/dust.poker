@@ -131,6 +131,21 @@
       .menu .row a { font-size: 14px; }
       .menu .invites { margin-top: 16px; }
       .menu .invites summary { cursor: pointer; color: var(--butter); }
+      .menu.show-invite > :not(.invite-lobby) { display: none; }
+      .invite-lobby { padding-bottom: 48px; }
+      .invite-lobby header { display: flex; justify-content: space-between; align-items: center; min-height: 76px; border-bottom: 1px solid var(--seam); }
+      .invite-lobby h1 { margin-top: clamp(28px, 5vw, 64px); font: 600 clamp(44px, 7vw, 82px)/1 var(--text); letter-spacing: -.045em; }
+      .lobby-id { margin-block: 12px 28px; color: var(--leaf); overflow-wrap: anywhere; }
+      .lobby-network { color: var(--butter); text-transform: capitalize; }
+      .lobby-address { font: 13px/1.5 monospace; }
+      .lobby-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 330px), 1fr)); gap: clamp(20px, 5vw, 72px); align-items: start; }
+      .lobby-seats { list-style: none; padding: 0; margin: 16px 0; }
+      .lobby-seats li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 8px 0; color: var(--leaf); border-bottom: 1px solid var(--seam); font-variant-numeric: tabular-nums; }
+      .lobby-seats strong { font-weight: 400; overflow-wrap: anywhere; }
+      .lobby-seats .occupied strong { color: var(--butter); font-weight: 650; }
+      .invite-copy input { max-width: 100%; }
+      .table-controls .invite-copy { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+      .table-controls .invite-copy span:not(:empty) { background: #160610; color: var(--cream); padding: 4px 6px; font: 14px system-ui; }
       .menu .table input { min-width: 0; flex: 1 1 100%; padding: 9px 12px; background: #10241e; border: 1px solid #829078; color: var(--ivory); }
       .menu .table input::placeholder { color: #aabaaa; }
       .menu .ticket span { font-size: 13px; }
@@ -259,7 +274,7 @@
       .mute.off { color: var(--dim); border-color: var(--brass-dark); text-decoration: line-through; }
       .mute:hover { filter: brightness(1.2); }
       /* Back to the menu: the music button's twin, in the other corner. */
-      .table-controls { position: fixed; top: 14px; left: 14px; z-index: 1; display: flex; gap: 6px; }
+      .table-controls { position: fixed; top: 14px; left: 14px; max-width: calc(100% - 28px); z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
       .leave {
         height: 38px; padding: 0 14px; cursor: pointer;
         font: 700 15px var(--text); color: var(--gold); background: #160610cc; border: 1px solid var(--brass); border-radius: 19px;
@@ -316,6 +331,15 @@
   </head>
   <body>
     <main class="menu">
+      <section class="invite-lobby wrap" hidden aria-labelledby="lobby-title">
+        <header><a class="brand lobby-back" href="/" aria-label="dust.poker home"><img src="./assets/site/house-spade.svg" alt="" width="44" height="44" />dust<span>.</span>poker</a><a class="lobby-back" href="/#tables">All tables</a></header>
+        <h1 id="lobby-title" tabindex="-1">Table invitation</h1>
+        <div class="lobby-id"><span class="lobby-network"></span> · <code class="lobby-address"></code></div>
+        <div class="lobby-layout">
+          <section class="line board"><h2>At the table</h2><p class="lobby-count" role="status"></p><ol class="lobby-seats" aria-label="Table seats"></ol><div class="lobby-share"></div></section>
+          <div class="board lobby-setup"><div class="line lobby-enter"><p class="lobby-cost"></p><div class="row"><button type="button" class="lobby-join join" disabled>Join table</button></div></div></div>
+        </div>
+      </section>
       <a class="skip" href="#tables">Skip to the tables</a>
       <header class="mast wrap" id="top">
         <a class="brand" href="#top" aria-label="dust.poker home"><img src="./assets/site/house-spade.svg" alt="" width="44" height="44" />dust<span>.</span>poker</a>
@@ -366,7 +390,7 @@
             <details class="invites" hidden>
               <summary>Play with friends</summary>
               <p>Open a table and share its link, or join one by address. Anyone who knows the address can take an open seat.</p>
-              <div class="row table"><input name="table" aria-label="Table address" placeholder="Table address" autocomplete="off" spellcheck="false" /><button class="join" type="button">Take a seat</button><button class="deploy" type="button">Open a new table</button><button class="share" type="button" hidden>Copy table link</button></div>
+              <div class="row table"><input name="table" aria-label="Table address" placeholder="Table address" autocomplete="off" spellcheck="false" /><button class="view-table" type="button">View table</button><button class="deploy" type="button">Open a new table</button></div>
             </details>
           </section>
         </div>
@@ -387,7 +411,7 @@
                 <p>Each move goes to Midnight. The contract checks that it follows the rules before play advances.</p>
                 <ol><li>Each player needs a separate dust.poker profile and a Ledger 9 compatible Lace wallet on the same test network. Pick Preview or Preprod. Set Lace to use a prover on your device.</li>
                   <li>Request test NIGHT at your unshielded address and select <b>Generate tDUST</b> in Lace. Allow time for tDUST to accrue for transaction fees. A seat takes 200 STAR for your stack and 200 STAR as a bond. One test NIGHT is one million STAR. <a href="https://docs.midnight.network/guides/acquire-tokens">Midnight funding guide</a></li>
-                  <li>One player selects <b>Connect Lace</b>, expands <b>Play with friends</b>, opens a new table, and copies its link. Everyone opens the same invite and chooses <b>Take a seat</b>, including the host. Play begins with two seated players.</li>
+                  <li>The host connects Lace and opens a new table under <b>Play with friends</b>. Choose <b>Copy invite link</b> in the lobby or at the table. Guests can see the seats before choosing <b>Join table</b>. Play begins with two seated players.</li>
                   <li>Keep the tab open for wallet prompts. To withdraw, choose <b>Cash out</b> and wait for <b>Seat closed</b>. Returning to the menu leaves your chips at the table. Keep your browser profile until you have withdrawn.</li></ol>
                 <p><a href="#tables">Choose a table</a> · <a href="https://github.com/hlolli/dust.poker#play-with-colleagues">Network and Lace settings</a></p>
                 <h4>Play with people drawn from the public queue</h4>

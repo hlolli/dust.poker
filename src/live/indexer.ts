@@ -90,8 +90,8 @@ export function watchContract(wsUri: string, address: string, onChange: (c: Chan
 }
 
 /** One request, so the block and the state come from the same moment. */
-export async function snapshot(indexerUri: string, address: string): Promise<Snapshot> {
-  const res = await fetch(indexerUri, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: QUERY, variables: { address } }) });
+export async function snapshot(indexerUri: string, address: string, signal?: AbortSignal): Promise<Snapshot> {
+  const res = await fetch(indexerUri, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ query: QUERY, variables: { address } }), signal });
   if (!res.ok) throw new Error(`indexer ${res.status} ${res.statusText}`);
   const { data, errors } = (await res.json()) as { data?: { block: Snapshot["block"]; contractAction: { state: string } | null }; errors?: { message: string }[] };
   if (errors?.length || !data) throw new Error(`indexer: ${errors?.map((e) => e.message).join("; ") ?? "no data"}`);

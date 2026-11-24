@@ -6,8 +6,8 @@ import { ledger } from "../../contracts/build/deal/contract/index.js";
 import { keyMaterial } from "../../contracts/harness.ts";
 import { Seat } from "../referee/contract.ts";
 import type { TableState } from "../referee/types.ts";
-import { bytes } from "./ledger.ts";
-import { joinOn } from "./live.ts";
+import { bytes, hex } from "./ledger.ts";
+import { inviteSeats, joinOn, publicPlayerKey } from "./live.ts";
 import { LocalChain } from "./local.ts";
 import { type KeyStore, LiveReferee } from "./referee.ts";
 import { callOn, type Chain } from "./chain.ts";
@@ -55,6 +55,20 @@ test("joining verifies the locked opening even after other players have joined",
   expect(await joinOn(chain, alice, bytes(chain.me), 200n, key)).toBe(0);
   expect(await joinOn(chain, bob, bytes(chain.me), 200n, key)).toBe(1);
   expect(await joinOn(chain, new Seat("Alice", alice.secret), bytes(chain.me), 200n, key)).toBe(0);
+});
+
+test("an invite lists the six chairs and their owner keys and recognizes drawn tables", async () => {
+  const key = () => Bun.file(`${import.meta.dir}/any.verifier`).bytes();
+  const chain = await LocalChain.deploy(key);
+  const roster = async () => inviteSeats(hex((await chain.snapshot()).state!.serialize()));
+  expect(await roster()).toEqual(Array(6).fill(null));
+  const alice = new Seat("Alice");
+  await joinOn(chain, alice, bytes(chain.me));
+  expect(await roster()).toEqual([publicPlayerKey(alice.secret), null, null, null, null, null]);
+  const drawn = await LocalChain.deploy(key, 10_000_000n, [publicPlayerKey(alice.secret), publicPlayerKey(7n)]);
+  expect(() => inviteSeats(hex(new L.ContractState().serialize()))).toThrow("invitation table");
+  const snapshot = await drawn.snapshot();
+  expect(() => inviteSeats(hex(snapshot.state!.serialize()))).toThrow("public draw");
 });
 
 test("two competing joins can retry as soon as the indexer shows who took the seat", async () => {

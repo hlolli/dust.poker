@@ -5,15 +5,18 @@ import type { PublicQueue, QueueStatus } from "../live/public-queue.ts";
 import type { Seat } from "../referee/contract.ts";
 import { MODELS } from "../scene/models.ts";
 import { checkIndexer } from "../live/indexer.ts";
+import { loadLive } from "../live/load.ts";
+import { inviteLobby } from "./invite-lobby.ts";
 import { connect, installed, NETWORKS, network as asked, type Wallet } from "../live/wallet.ts";
 import { activate, activeProfile, createProfile, type Profile, profiles, removeProfile, updateProfile } from "./profiles.ts";
 
 /** What the menu resolves with: the Practice table, or a Live one you have a seat at. */
-export type Entry = { profile: Profile; mode: "practice" } | { profile: Profile; mode: "live"; chain: Chain; seat: Seat; store: KeyStore };
+export type Entry = { profile: Profile; mode: "practice" } | { profile: Profile; mode: "live"; access: "invite" | "draw"; chain: Chain; seat: Seat; store: KeyStore };
 
 export function showMenu(): Promise<Entry> {
   return new Promise((resolve) => {
     const el = document.querySelector<HTMLElement>("main.menu")!;
+    let lobby: ReturnType<typeof inviteLobby> | undefined;
     el.querySelector(".network")!.innerHTML = NETWORKS.map(n =>
       `<label class="ticket"><input type="radio" name="network" value="${n}" /><span>${n}</span></label>`).join("");
 
@@ -90,12 +93,14 @@ export function showMenu(): Promise<Entry> {
         }),
         add,
       );
+      lobby?.render();
     };
     renderProfiles();
 
     // ---- Practice ---------------------------------------------------------------------------
     const leave = (entry: Entry) => {
       clearInterval(bandTimer);
+      lobby?.stop();
       resetDraw();
       el.remove();
       resolve(entry);
@@ -157,11 +162,10 @@ export function showMenu(): Promise<Entry> {
     });
     const funding = el.querySelector<HTMLElement>(".funding")!;
     const address = el.querySelector<HTMLInputElement>("input[name=table]")!;
-    const share = el.querySelector<HTMLButtonElement>(".share")!;
     const params = new URLSearchParams(location.search);
     address.value = params.get("table") ?? "";
     invites.open = Boolean(address.value);
-    if (!location.hash && (address.value || params.has("network"))) {
+    if (!location.hash && !params.has("table") && params.has("network")) {
       el.querySelector(activeProfile() ? "#live-table" : ".profiles")!.scrollIntoView();
     }
     let selected = asked();
@@ -172,6 +176,7 @@ export function showMenu(): Promise<Entry> {
       for (const control of live.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")) control.disabled = busy;
       plates.inert = busy;
       go.disabled = busy;
+      lobby?.setBusy(busy);
     };
     const pageAddress = (tableAddress: string) => {
       const url = new URL(location.href);
@@ -180,21 +185,7 @@ export function showMenu(): Promise<Entry> {
       else url.searchParams.delete("table");
       history.replaceState(null, "", url);
     };
-    const updateShare = () => { share.hidden = !/^[a-f\d]{64}$/i.test(address.value.trim()); };
-    address.oninput = updateShare;
-    updateShare();
-    share.onclick = async () => {
-      const invite = new URL(location.pathname, location.origin);
-      invite.search = new URLSearchParams({ network: selected, table: address.value.trim() }).toString();
-      try {
-        await navigator.clipboard.writeText(invite.href);
-        say("Table link copied. Each player can open it and take a seat.");
-      } catch {
-        say(`Share this table link: ${invite.href}`);
-      }
-    };
     for (const radio of network.querySelectorAll<HTMLInputElement>("input")) radio.checked = radio.value === selected;
-    if (address.value) say(`This table invite is for ${selected}. Choose that network in Lace, then connect.`);
     connectButton.onclick = async () => {
       const [found] = installed();
       if (!found) return say("No Midnight wallet in this browser. Install Lace, then reload.");
@@ -208,8 +199,9 @@ export function showMenu(): Promise<Entry> {
         Object.assign(window, { __wallet: w });
         live.classList.remove("unlit");
         connectButton.hidden = true;
-        invites.hidden = false;
-        publicSeating.hidden = false;
+        invites.hidden = !!lobby;
+        publicSeating.hidden = !!lobby;
+        lobby?.setWallet(w);
         say(`${w.name} on ${selected}. A seat costs 200 STAR plus a 200 STAR bond. Transactions use tDUST.`);
         void w.api.getDustBalance?.().then(({ balance, cap }) => {
           if (wallet !== w || balance !== 0n) return;
@@ -231,7 +223,6 @@ export function showMenu(): Promise<Entry> {
       Reflect.deleteProperty(window, "__wallet");
       address.value = "";
       pageAddress("");
-      updateShare();
       live.classList.add("unlit");
       invites.hidden = true;
       invites.open = false;
@@ -241,16 +232,15 @@ export function showMenu(): Promise<Entry> {
       connectButton.hidden = false;
       say(`Select ${selected} in Lace, then connect.`);
     };
-    const withLive = async (what: string, run: (live: typeof import("../live/live.ts"), w: Wallet, profile: Profile) => Promise<string>) => {
-      const profile = activeProfile();
+    const withLive = async (what: string, run: (live: typeof import("../live/live.ts"), w: Wallet, profile: Profile) => Promise<string>, createIfNeeded = false) => {
       if (!wallet) return say("Connect the wallet first.");
-      if (!profile) return say("Put your name on a plate first: it is your identity at the table.");
       lock(true);
       say(`${what}…`);
       try {
-        const [{ ready: runtimeReady }, { ready: ledgerReady }] = await Promise.all([import("../compact/onchain-runtime-shim.js"), import("../live/ledger-shim.js")]);
-        await Promise.all([runtimeReady, ledgerReady]);
-        const mod = await import("../live/live.ts");
+        const profile = activeProfile() ?? (createIfNeeded ? await newProfile() : null);
+        if (!profile) return say("Choose a player profile to continue.");
+        if (createIfNeeded) renderProfiles();
+        const mod = await loadLive();
         Object.assign(window as unknown as Record<string, unknown>, { __live: mod });
         say(await run(mod, wallet, profile));
       } catch (e) {
@@ -273,28 +263,56 @@ export function showMenu(): Promise<Entry> {
         const seated = await q.act(displayed.action, say);
         if (seated) {
           pageAddress("");
-          leave({ profile, mode: "live", ...seated });
+          leave({ profile, mode: "live", access: "draw", ...seated });
           return "Your public seat is ready.";
         }
       }
       await refreshDraw(q);
       return `${w.name} on ${w.networkId}.`;
     });
-    el.querySelector<HTMLButtonElement>(".join")!.onclick = () =>
-      withLive("Taking a seat", async (mod, w, profile) => {
-        if (!/^[0-9a-f]{64}$/i.test(address.value.trim())) throw new Error("A table address is 64 hex characters.");
-        const { chain, seat, store } = await mod.joinTable(w, profile, address.value.trim());
-        pageAddress(chain.address);
-        leave({ profile, mode: "live", chain, seat, store });
-        return `Seat ${seat.index + 1} is yours.`;
-      });
+    const openLobby = (table: string) => {
+      resetDraw();
+      address.value = table;
+      const panel = el.querySelector<HTMLElement>(".invite-lobby")!;
+      const setup = panel.querySelector<HTMLElement>(".lobby-setup")!;
+      setup.prepend(el.querySelector<HTMLElement>(".profiles")!, live);
+      const home = new URL(location.href);
+      home.searchParams.delete("table");
+      if (!NETWORKS.includes(selected)) home.searchParams.delete("network");
+      home.hash = "tables";
+      for (const back of panel.querySelectorAll<HTMLAnchorElement>(".lobby-back")) back.href = home.href;
+      home.hash = "wallet-setup";
+      live.querySelector<HTMLAnchorElement>('a[href="#wallet-setup"]')!.href = home.href;
+      network.hidden = publicSeating.hidden = invites.hidden = true;
+      live.querySelector("h3")!.textContent = "Wallet";
+      panel.hidden = false;
+      el.classList.add("show-invite");
+      el.scrollTop = 0;
+      panel.querySelector<HTMLElement>("h1")!.focus({ preventScroll: true });
+      lobby = inviteLobby(panel, selected, table);
+      setup.hidden = !lobby.valid;
+      connectButton.hidden = !!wallet || !lobby.valid;
+      say(wallet ? `${wallet.name} on ${selected}.` : `Connect Lace on ${selected} to join.`);
+      lobby.setWallet(wallet);
+      lobby.join.onclick = () => withLive("Joining the table", async (mod, w, profile) => {
+        const joined = await mod.joinTable(w, profile, table);
+        leave({ profile, mode: "live", access: "invite", ...joined });
+        return `Seat ${joined.seat.index + 1} is yours.`;
+      }, true);
+    };
+    live.querySelector<HTMLButtonElement>(".view-table")!.onclick = () => {
+      const table = address.value.trim().toLowerCase();
+      if (!/^[0-9a-f]{64}$/.test(table)) return say("A table address is 64 hex characters.");
+      pageAddress(table);
+      openLobby(table);
+    };
     el.querySelector<HTMLButtonElement>(".deploy")!.onclick = () =>
       withLive("Opening a table", async (mod, w, profile) => {
         const deployed = await mod.deployTable(w, profile, say);
-        address.value = deployed;
         pageAddress(deployed);
-        updateShare();
-        return "The table is open. Copy the table link for your colleagues, then take a seat.";
+        openLobby(deployed);
+        return "Your table is open. Copy the invite link for your friends.";
       });
+    if (params.has("table")) openLobby(address.value.trim().toLowerCase());
   });
 }
