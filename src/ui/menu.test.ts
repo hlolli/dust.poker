@@ -7,11 +7,32 @@ function serveSite() {
     hostname: "127.0.0.1", port: 0,
     fetch(req) {
       const path = new URL(req.url).pathname.slice(1) || "index.html";
-      if (!/^[\w-]+[\w.-]*$/.test(path)) return new Response(null, { status: 404 });
+      if (!/^(?:club\/)?[\w-]+[\w.-]*$/.test(path)) return new Response(null, { status: 404 });
       return new Response(Bun.file(new URL(path, dist)));
     },
   });
 }
+
+test.skipIf(!process.env.POKER_BROWSER_TEST)("the field guides work on mobile without a wallet or JavaScript", async () => {
+  const browser = await chromium.launch({ channel: "chrome" });
+  const site = serveSite();
+  try {
+    const page = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 360, height: 780 } });
+    await page.goto(site.url.href);
+    await page.getByRole("link", { name: "How it works" }).click();
+    await page.getByRole("link", { name: "Inspect the protocol" }).click();
+    await page.getByRole("heading", { name: "What does a shuffle prove?" }).waitFor();
+    expect(await page.locator("#proofs").evaluate(el => Math.abs(el.getBoundingClientRect().top) < 2)).toBe(true);
+    await page.getByRole("link", { name: "Wallet setup" }).click();
+    await page.getByRole("heading", { name: "Bring friends to a Live table" }).waitFor();
+    expect(await page.locator(".menu").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await page.getByRole("link", { name: "Choose a table", exact: true }).last().click();
+    expect(new URL(page.url()).hash).toBe("#tables");
+  } finally {
+    await browser.close();
+    site.stop(true);
+  }
+}, 30_000);
 
 test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network and only opens a table after both indexer checks pass", async () => {
   const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
@@ -35,7 +56,6 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
       } };
     });
     const page = await context.newPage();
-    await page.route("https://fonts.googleapis.com/**", route => route.fulfill({ contentType: "text/css", body: "" }));
     const indexer = "indexer.preview.midnight.network/api/v4/graphql";
     let status = 403;
     let allowSocket = false;
@@ -78,7 +98,6 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("the character preview resizes only
   const site = serveSite();
   try {
     const page = await browser.newPage({ deviceScaleFactor: 1.25 });
-    await page.route("https://fonts.googleapis.com/**", route => route.fulfill({ contentType: "text/css", body: "" }));
     await page.goto(site.url.href, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "+ your name", exact: true }).click();
     const changes = await page.locator(".creator canvas").evaluate(async (canvas: HTMLCanvasElement) => {
@@ -99,6 +118,12 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("the character preview resizes only
       return { stationary, writes, width: canvas.width, height: canvas.height };
     });
     expect(changes).toEqual({ stationary: 0, writes: 1, width: 446, height: 301 });
+    await page.getByRole("button", { name: "Never mind" }).click();
+    await page.getByRole("button", { name: "Practice table" }).click();
+    await page.getByRole("textbox", { name: "Name on the plate" }).fill("River");
+    await page.getByRole("button", { name: "Take this name" }).click();
+    await page.locator("body > canvas").waitFor();
+    expect(await page.locator("main.menu").count()).toBe(0);
   } finally {
     await browser.close();
     site.stop(true);

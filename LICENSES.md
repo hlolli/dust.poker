@@ -53,7 +53,11 @@ From the [Microsoft Rocketbox Avatar Library](https://github.com/microsoft/Micro
 
 ## Fonts
 
-The menu and the action bar load Limelight, Yellowtail and Cormorant Garamond from Google Fonts at run time (`src/index.html`); nothing is shipped in the repo. All three are under the SIL Open Font License 1.1. The 3D labels use system fonts.
+The site ships the Latin subsets of Cormorant Garamond (regular and italic) and Limelight from Google Fonts under the SIL Open Font License 1.1. The fonts and their copyright notices are served together. [Cormorant Garamond licence](src/assets/site/club/Cormorant-OFL.txt) · [Limelight licence](src/assets/site/club/Limelight-OFL.txt)
+
+## Card room website (src/assets/site/)
+
+The house spade is original dust.poker artwork. The playing-card illustration and its social preview were made with ImageGen for dust.poker. The table image shows the game's room and characters as rendered in play. The site artwork is released under the [MIT licence](LICENSE), with the underlying room and character assets credited above.
 
 ## Contracts and prover
 

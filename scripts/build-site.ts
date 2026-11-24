@@ -16,6 +16,8 @@ if (existsSync(`${root}/contracts/build/deal/keys`)) {
   for (const d of ["keys", "zkir"]) cpSync(`${root}/contracts/build/deal/${d}`, `${root}/dist/deal/${d}`, { recursive: true });
   console.log("proving keys copied to dist/deal");
 }
+// Stable public URLs for the social preview and locally hosted fonts with their licences.
+cpSync(`${root}/src/assets/site/club`, `${root}/dist/club`, { recursive: true });
 const result = await Bun.build({
   entrypoints: [`${root}/src/index.html`],
   outdir: `${root}/dist`,

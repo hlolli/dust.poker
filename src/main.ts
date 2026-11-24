@@ -1,5 +1,4 @@
 // The entry: the main menu first (who you are, Practice or Live), then the room.
-import { enterRoom } from "./room.ts";
 import { showMenu } from "./ui/menu.ts";
 import { isLocalSite } from "./live/wallet.ts";
 
@@ -7,4 +6,6 @@ import { isLocalSite } from "./live/wallet.ts";
 const bridge = new URLSearchParams(location.search).get("wallet");
 if (bridge && isLocalSite(location.hostname)) (await import("./live/bridge-wallet.ts")).installBridge(bridge);
 
-await enterRoom(await showMenu());
+const entry = await showMenu();
+const { enterRoom } = await import("./room.ts");
+await enterRoom(entry);
