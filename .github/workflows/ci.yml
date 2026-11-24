@@ -25,3 +25,5 @@ jobs:
       - run: bun run build
       - name: Check the Live invite and connection flow in Chrome
         run: POKER_BROWSER_TEST=1 bun test src/ui/menu.test.ts
+      - name: Check character preview and first Practice game in Chrome
+        run: POKER_BROWSER_TEST=1 bun test src/ui/creator.test.ts

@@ -100,9 +100,11 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
       if (avatar && t.name !== "model") applyLook(avatar, look);
     };
     const close = (result: { name: string; look: Look } | null) => {
+      loading++;
       cancelAnimationFrame(frame);
       observer.disconnect();
       renderer.dispose();
+      renderer.forceContextLoss();
       el.remove();
       resolve(result);
     };
