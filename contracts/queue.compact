@@ -1,0 +1,42 @@
+// Registration closes by block time before the future public randomness round.
+// Each slot carries the key of the entrant. Only that key may announce its proposed
+// game; clients use the announcement of the first player in their verified draw.
+import CompactStandardLibrary;
+
+export ledger entrants: Map<Uint<64>, Map<Uint<16>, Bytes<32>>>;
+export ledger count: Map<Uint<64>, Uint<16>>;
+export ledger registered: Map<Uint<64>, Set<Bytes<32>>>;
+export ledger proposals: Map<Uint<64>, Map<Bytes<32>, Bytes<32>>>;
+witness player_secret(): JubjubScalar;
+
+circuit player(): Bytes<32> {
+  return disclose(persistentHash<JubjubPoint>(ecMulGenerator(player_secret())));
+}
+
+export circuit enter_queue(round: Uint<64>): [] {
+  const r = disclose(round);
+  const start = (r * 300) as Uint<64>;
+  assert(blockTimeGte(start) && blockTimeLt((start + 300) as Uint<64>), "registration has closed");
+  const who = player();
+  if (!count.member(r)) {
+    count.insert(r, 0);
+    entrants.insertDefault(r);
+    registered.insertDefault(r);
+  }
+  assert(!registered.lookup(r).member(who), "already in this draw");
+  const n = count.lookup(r);
+  assert(n < 1024, "draw is full");
+  entrants.lookup(r).insert(n, who);
+  count.insert(r, (n + 1) as Uint<16>);
+  registered.lookup(r).insert(who);
+}
+
+export circuit announce_table(round: Uint<64>, address: Bytes<32>): [] {
+  const r = disclose(round);
+  assert(blockTimeGte(((r + 1) * 300) as Uint<64>), "registration still open");
+  const who = player();
+  assert(registered.member(r) && registered.lookup(r).member(who), "not in this draw");
+  if (!proposals.member(r)) { proposals.insertDefault(r); }
+  assert(!proposals.lookup(r).member(who), "already announced");
+  proposals.lookup(r).insert(who, disclose(address));
+}

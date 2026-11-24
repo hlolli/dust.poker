@@ -1,0 +1,35 @@
+// A drawn table installs claim_seat in place of join. All other operations and
+// storage paths are the ordinary poker contract's. Its immutable opening reserves
+// each free chair by key. A departure deletes that reservation permanently.
+import CompactStandardLibrary;
+include "shared/table-state";
+witness player_secret(): JubjubScalar;
+
+// Run locally on the normal empty constructor state to build or verify an opening.
+// This operation is never installed on a table.
+export circuit reserve_seat(seat: Uint<8>, key: Bytes<32>): [] {
+  const s = disclose(seat);
+  assert(s < 6 && !payout_address.member(s), "chair already reserved");
+  payout_address.insert(s, disclose(key));
+  phase = Phase.reserved;
+  n_players = (n_players + 1) as Uint<8>;
+}
+
+export circuit claim_seat(seat: Uint<8>, address: Bytes<32>, buy: Uint<64>): [] {
+  const s = disclose(seat);
+  const b = disclose(buy);
+  const who = disclose(ecMulGenerator(player_secret()));
+  assert(s < 6 && !seat_owner.member(s), "chair occupied");
+  assert(phase == Phase.reserved, "public seating closed");
+  assert(payout_address.member(s) && payout_address.lookup(s) == disclose(persistentHash<JubjubPoint>(who)), "chair reserved for another player");
+  assert(payout_address.size() == n_players, "a drawn player withdrew before the table opened");
+  assert(b >= 80 && b <= 200, "buy-in out of range");
+  receiveUnshielded(asset, (b + 200) as Uint<128>);
+  seat_owner.insert(s, who);
+  payout_address.insert(s, disclose(address));
+  const previous = stack;
+  const seats = [0, 1, 2, 3, 4, 5] as Vector<6, Uint<8>>;
+  stack = map((i: Uint<8>): Uint<64> => (i == s ? b : previous[i]), seats);
+  const count = fold((n: Uint<8>, i: Uint<8>): Uint<8> => (n + (seat_owner.member(i) ? 1 : 0)) as Uint<8>, 0, seats);
+  if (count == n_players) { phase = Phase.idle; }
+}

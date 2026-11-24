@@ -33,13 +33,21 @@ For the dealer button, export the falcon at 1,600 triangles and run `uv run spik
 1. Each player needs their own browser profile and Ledger 9 compatible Lace wallet on the same network. Start with [Preview](https://dust.poker/?network=preview), which has a public indexer. In Lace's Midnight settings, select a prover that runs on your own device, either the in-process prover if available or a running local Ledger 9 proof server.
 2. If Lace shows the retired `blockfrost.lw.iog.io` proxy, set the node and indexer for your network as shown below. Wait for Lace to sync. For Preprod, substitute your own Midnight Preprod project token in both URLs. Lace derives the WebSocket indexer URL from the HTTP URL. [Midnight network endpoints](https://docs.midnight.network/relnotes/network)
 3. Request tNIGHT at your unshielded address, select **Generate tDUST** in Lace, and wait for tDUST to accrue. Each seat puts 200 STAR into play and posts a 200 STAR bond. Hosting and playing require tDUST for multiple transaction fees. [Wallet funding guide and faucets](https://docs.midnight.network/guides/acquire-tokens)
-4. At dust.poker, create a player profile, select the wallet's network and choose **Connect Lace**. One player chooses **Open a new table** and approves each deployment transaction. Once the table opens, choose **Copy table link** and send it to the group. Everyone, including the host, chooses **Take a seat**. The first hand starts when two players are seated.
+4. At dust.poker, create a player profile, select the wallet's network and choose **Connect Lace**. Under **Play with friends**, one player chooses **Open a new table** and approves each deployment transaction. Once the table opens, choose **Copy table link** and send it to the group. Everyone, including the host, chooses **Take a seat**. The first hand starts when two players are seated.
 5. Keep the tab open and approve the wallet prompts during the hand. To withdraw your remaining stack and bond, choose **Cash out**, finish any hand you are in, and approve the withdrawal. Wait for **Seat closed** and check the payout in Lace. **Back to menu** leaves your funds at the table.
 
 | Lace setting | Preview | Preprod |
 | --- | --- | --- |
 | Node | `https://rpc.preview.midnight.network` | `https://rpc.midnight-preprod.blockfrost.io?project_id=YOUR_TOKEN` |
 | Indexer | `https://indexer.preview.midnight.network/api/v4/graphql` | `https://midnight-preprod.blockfrost.io/api/v0?project_id=YOUR_TOKEN` |
+
+### Take a public seat
+
+Connect Lace and choose **Find a public seat**. On a fresh network the first volunteer can open the shared queue through Lace. Select **Enter the draw** before the five-minute registration window closes. There is no membership approval or extra queue deposit. Players pay their wallet’s network fees.
+
+At least four entries are needed. Four entrants make two heads-up tables, eight make two tables of four, and twelve make two tables of six. Seats stay reserved for the players drawn. The selected host opens the assigned table, and each player confirms their own buy-in. The first deal can start once all assigned players have taken their seats. If someone withdraws before everyone arrives, the remaining players can cash out and enter a later draw. Reopen the public draw with the same browser profile to resume. If the host never opens the table, you can leave the draw.
+
+Registration closes on Midnight before a fixed drand quicknet round. Clients verify the signed randomness and the roster at the immutable table opening. A group holding several entries can still draw seats together, and players can communicate elsewhere. A new profile is a new entry identity. [Queue contract](contracts/queue.compact) · [Seat admission](contracts/public-seat.compact) · [Draw](src/live/draw.ts)
 
 ### Build the Live contract
 
@@ -87,6 +95,8 @@ On localhost, the menu also offers Undeployed. `docker compose -f local/compose.
 removes the development chain and indexer state together; the next start creates a fresh chain.
 
 Without Lace: `bun local/bridge.ts` serves a genesis wallet on this machine, and the page opened as `http://localhost:3000/?wallet=http://127.0.0.1:8790&network=undeployed` connects to it in place of Lace. `bun run live:check` uses two genesis wallets, registers their Night for DUST if needed, plays every street to showdown, and verifies that both stacks and bonds return to the wallets.
+
+`bun local/public-draw.ts` runs the public playtest on the same stack. Four genesis wallets enter one window. Two drawn opponents take their reserved seats, play to showdown, and withdraw. The draw reads the signed beacon from drand quicknet.
 
 The optional `local/build-indexer.sh` and `local/indexer.sh` run the indexer on the host;
 start only the `node` and `proof-server` Compose services when using those scripts.

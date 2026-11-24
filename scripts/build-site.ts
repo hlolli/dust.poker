@@ -6,15 +6,16 @@ import { cpSync, existsSync } from "node:fs";
 import plugin from "./wasm-plugin.ts";
 
 const root = `${import.meta.dir}/..`;
-if (!existsSync(`${root}/contracts/build/deal/contract/index.js`)) {
+const contracts = ["deal", "queue", "public-seat"];
+if (contracts.some(name => !existsSync(`${root}/contracts/build/${name}/contract/index.js`))) {
   console.log("compiling the contracts first");
   await $`bun ${root}/scripts/build-contracts.ts`;
 }
 // The proving keys, when this checkout has them (compact:build --zk): the Live table's wallet
 // prover fetches them from /deal (src/live/live.ts). Without them the site builds and Practice plays.
-if (existsSync(`${root}/contracts/build/deal/keys`)) {
-  for (const d of ["keys", "zkir"]) cpSync(`${root}/contracts/build/deal/${d}`, `${root}/dist/deal/${d}`, { recursive: true });
-  console.log("proving keys copied to dist/deal");
+for (const name of contracts) {
+  if (!existsSync(`${root}/contracts/build/${name}/keys`)) continue;
+  for (const d of ["keys", "zkir"]) cpSync(`${root}/contracts/build/${name}/${d}`, `${root}/dist/${name}/${d}`, { recursive: true });
 }
 // Stable public URLs for the social preview and locally hosted fonts with their licences.
 cpSync(`${root}/src/assets/site/club`, `${root}/dist/club`, { recursive: true });

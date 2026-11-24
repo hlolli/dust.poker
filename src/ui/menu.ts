@@ -1,6 +1,7 @@
 import { setFor } from "../scene/lounge-score.ts";
 import type { Chain } from "../live/chain.ts";
 import type { KeyStore } from "../live/referee.ts";
+import type { PublicQueue, QueueStatus } from "../live/public-queue.ts";
 import type { Seat } from "../referee/contract.ts";
 import { MODELS } from "../scene/models.ts";
 import { checkIndexer } from "../live/indexer.ts";
@@ -95,6 +96,7 @@ export function showMenu(): Promise<Entry> {
     // ---- Practice ---------------------------------------------------------------------------
     const leave = (entry: Entry) => {
       clearInterval(bandTimer);
+      resetDraw();
       el.remove();
       resolve(entry);
     };
@@ -110,12 +112,55 @@ export function showMenu(): Promise<Entry> {
     const connectButton = el.querySelector<HTMLButtonElement>(".connect")!;
     connectButton.disabled = false;
     const network = el.querySelector<HTMLDivElement>(".network")!;
-    const table = el.querySelector<HTMLDivElement>(".table")!;
+    const invites = el.querySelector<HTMLDetailsElement>(".invites")!;
+    const publicSeating = el.querySelector<HTMLElement>(".public-seating")!;
+    const findSeat = el.querySelector<HTMLButtonElement>(".find-seat")!;
+    const forget = el.querySelector<HTMLButtonElement>(".forget-draw")!;
+    const drawStatus = el.querySelector<HTMLElement>(".draw-status")!;
+    let queue: PublicQueue | undefined;
+    let queueProfile: string | undefined;
+    let displayed: QueueStatus | undefined;
+    let poll: ReturnType<typeof setTimeout> | undefined;
+    const resetDraw = () => {
+      clearTimeout(poll);
+      queue = undefined;
+      displayed = undefined;
+      queueProfile = undefined;
+      findSeat.textContent = "Find a public seat";
+      forget.hidden = true;
+      drawStatus.textContent = "Anyone can enter. A random draw picks your opponents.";
+    };
+    const refreshDraw = async (q: PublicQueue) => {
+      clearTimeout(poll);
+      try {
+        const next = await q.status();
+        if (queue !== q) return;
+        if (activeProfile()?.id !== queueProfile) { resetDraw(); return; }
+        displayed = next;
+        drawStatus.textContent = next.message;
+        findSeat.textContent = { open: "Open the public queue", enter: "Enter the draw", wait: "Check draw", host: "Open assigned table", join: "Take drawn seat", resume: "Return to table", finished: "Find another draw" }[next.action];
+        forget.hidden = next.action !== "wait" && next.action !== "host" && next.action !== "join";
+        if (next.action === "wait") poll = setTimeout(() => void refreshDraw(q), 10_000);
+      } catch (error) {
+        if (queue === q) {
+          displayed = undefined;
+          findSeat.textContent = "Check public draw";
+          forget.hidden = !q.hasTicket();
+          drawStatus.textContent = error instanceof Error ? error.message : String(error);
+        }
+      }
+    };
+    forget.onclick = () => withLive("Leaving the draw", async (_, _wallet, profile) => {
+      if (queueProfile === profile.id) await queue?.forget();
+      resetDraw();
+      return "You left this draw. Your entry in the closed roster stays fixed.";
+    });
     const funding = el.querySelector<HTMLElement>(".funding")!;
     const address = el.querySelector<HTMLInputElement>("input[name=table]")!;
     const share = el.querySelector<HTMLButtonElement>(".share")!;
     const params = new URLSearchParams(location.search);
     address.value = params.get("table") ?? "";
+    invites.open = Boolean(address.value);
     if (!location.hash && (address.value || params.has("network"))) {
       el.querySelector(activeProfile() ? "#live-table" : ".profiles")!.scrollIntoView();
     }
@@ -125,6 +170,8 @@ export function showMenu(): Promise<Entry> {
     const fail = (e: unknown) => say(typeof e === "object" && e !== null && "message" in e ? String(e.message) : String(e));
     const lock = (busy: boolean) => {
       for (const control of live.querySelectorAll<HTMLInputElement | HTMLButtonElement>("input, button")) control.disabled = busy;
+      plates.inert = busy;
+      go.disabled = busy;
     };
     const pageAddress = (tableAddress: string) => {
       const url = new URL(location.href);
@@ -161,7 +208,8 @@ export function showMenu(): Promise<Entry> {
         Object.assign(window, { __wallet: w });
         live.classList.remove("unlit");
         connectButton.hidden = true;
-        table.hidden = false;
+        invites.hidden = false;
+        publicSeating.hidden = false;
         say(`${w.name} on ${selected}. A seat costs 200 STAR plus a 200 STAR bond. Transactions use tDUST.`);
         void w.api.getDustBalance?.().then(({ balance, cap }) => {
           if (wallet !== w || balance !== 0n) return;
@@ -185,7 +233,10 @@ export function showMenu(): Promise<Entry> {
       pageAddress("");
       updateShare();
       live.classList.add("unlit");
-      table.hidden = true;
+      invites.hidden = true;
+      invites.open = false;
+      publicSeating.hidden = true;
+      resetDraw();
       funding.hidden = true;
       connectButton.hidden = false;
       say(`Select ${selected} in Lace, then connect.`);
@@ -195,7 +246,7 @@ export function showMenu(): Promise<Entry> {
       if (!wallet) return say("Connect the wallet first.");
       if (!profile) return say("Put your name on a plate first: it is your identity at the table.");
       lock(true);
-      say(`${what}: confirm in the wallet`);
+      say(`${what}…`);
       try {
         const [{ ready: runtimeReady }, { ready: ledgerReady }] = await Promise.all([import("../compact/onchain-runtime-shim.js"), import("../live/ledger-shim.js")]);
         await Promise.all([runtimeReady, ledgerReady]);
@@ -208,6 +259,27 @@ export function showMenu(): Promise<Entry> {
         lock(false);
       }
     };
+    findSeat.onclick = () => withLive("Public seating", async (_, w, profile) => {
+      if (queueProfile !== profile.id || !queue) {
+        resetDraw();
+        const { PublicQueue } = await import("../live/public-queue.ts");
+        queue = new PublicQueue(w, profile);
+        queueProfile = profile.id;
+      }
+      const q = queue;
+      clearTimeout(poll);
+      if (displayed?.action === "finished") await q.forget();
+      else if (displayed && displayed.action !== "wait") {
+        const seated = await q.act(displayed.action, say);
+        if (seated) {
+          pageAddress("");
+          leave({ profile, mode: "live", ...seated });
+          return "Your public seat is ready.";
+        }
+      }
+      await refreshDraw(q);
+      return `${w.name} on ${w.networkId}.`;
+    });
     el.querySelector<HTMLButtonElement>(".join")!.onclick = () =>
       withLive("Taking a seat", async (mod, w, profile) => {
         if (!/^[0-9a-f]{64}$/i.test(address.value.trim())) throw new Error("A table address is 64 hex characters.");

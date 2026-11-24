@@ -22,7 +22,7 @@ export type Arg = bigint | bigint[] | Uint8Array | boolean;
 export type Step = { circuit: Circuit; args: Arg[] };
 /** Circuits that do not take the caller's clock. */
 export const UNTIMED = new Set<Circuit>(["join", "buy_in", "stand_up", "leave", "expire", "settle", "settle_abort"]);
-export const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9 };
+export const Phase = { idle: 0, keys: 1, shuffle: 2, holes: 3, playing: 4, release: 5, tabling: 6, showdown: 7, done: 8, aborted: 9, reserved: 10 };
 export const Prep = { none: 0, keys: 1, shuffle: 2, ready: 3 };
 export const MIN_BUY_IN = 80;
 export const MAX_BUY_IN = 200;
@@ -194,7 +194,7 @@ export function emptyTable(names: (string | null)[], you: number): TableState {
 export function tableFrom(l: Ledger, v: View): TableState {
   const phase = l.phase;
   // A finished deal stays on the table (cards, bets, the winner) until the next one starts.
-  const inDeal = phase >= Phase.keys;
+  const inDeal = phase >= Phase.keys && phase !== Phase.reserved;
   const betting = phase >= Phase.playing && phase <= Phase.showdown;
   let mine: Card[] | null = null;
   if (betting || phase === Phase.done) {

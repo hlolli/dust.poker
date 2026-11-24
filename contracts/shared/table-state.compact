@@ -1,0 +1,78 @@
+enum Phase { idle, keys, shuffle, holes, playing, release, tabling, showdown, done, aborted, reserved }
+// The next deck's preparation.
+enum Prep { none, keys, shuffle, ready }
+
+struct Locked {
+  a: JubjubPoint,
+  b: JubjubPoint,
+}
+
+// The one asset staked at this table.
+export ledger asset: Bytes<32>;
+// Seats: seat -> the player's key point. A player's identity is ecMulGenerator(secret):
+// 360 rows, against 3,900 for a SHA-256 identity.
+export ledger seat_owner: Map<Uint<8>, JubjubPoint>;
+// seat -> the address stack and bond go back to
+export ledger payout_address: Map<Uint<8>, Bytes<32>>;
+export ledger stack: Vector<6, Uint<64>>;
+// Seats sitting out the next deals (and the next deck), so a leave cannot be pre-empted by
+// someone starting deal after deal.
+export ledger leaving: Vector<6, Boolean>;
+
+// The deal in progress.
+export ledger phase: Phase;
+export ledger deal_no: Counter;
+export ledger in_deal: Vector<6, Boolean>;
+export ledger n_players: Uint<8>;
+export ledger dealer: Uint<8>;
+export ledger turn: Uint<8>; // seat whose shuffle is next
+export ledger deadline: Uint<64>; // block time by which the awaited step must arrive; 0 when none
+export ledger offender: Uint<8>; // seat that missed the deadline, when aborted
+
+// Betting.
+export ledger street: Uint<8>; // 0 preflop, 1 flop, 2 turn, 3 river
+export ledger release_street: Uint<8>; // the street whose board is being released
+export ledger to_act: Uint<8>;
+export ledger current_bet: Uint<64>;
+export ledger min_raise: Uint<64>; // size of the last full raise
+export ledger bet: Vector<6, Uint<64>>; // committed this street
+export ledger total: Vector<6, Uint<64>>; // committed this deal
+export ledger folded: Vector<6, Boolean>;
+export ledger all_in: Vector<6, Boolean>;
+export ledger acted: Vector<6, Boolean>; // has acted since the last full raise this street
+export ledger bank: Vector<6, Uint<64>>; // time bank left this deal, per seat
+export ledger act_by: Uint<64>; // when the actor's 30 s are up; `deadline` adds their bank
+
+// The deck for the current deal: 52 locked cards.
+export ledger deck: Vector<52, Locked>;
+// The unshuffled deck, computed once: 52 hashToCurve in a circuit cost 30,000 rows.
+export ledger fresh: Vector<52, Locked>;
+// Sum of every player's deck key point; cards are encrypted to this.
+export ledger joint_key: JubjubPoint;
+// seat -> deck key point, for checking shares (a Map: cheaper to look up than a vector)
+export ledger keys: Map<Uint<8>, JubjubPoint>;
+export ledger keys_posted: Counter;
+export ledger shuffles_done: Counter;
+
+// The next deal's deck, prepared while this one is played.
+export ledger next_prep: Prep;
+export ledger next_in_deal: Vector<6, Boolean>;
+export ledger next_n_players: Uint<8>;
+export ledger next_deck: Vector<52, Locked>;
+export ledger next_joint_key: JubjubPoint;
+export ledger next_keys: Vector<6, JubjubPoint>;
+export ledger next_has_key: Vector<6, Boolean>;
+export ledger next_keys_posted: Counter;
+export ledger next_turn: Uint<8>;
+export ledger next_deadline: Uint<64>;
+// pos * 8 + seat -> that seat's share for that position
+export ledger shares_posted: Map<Uint<16>, JubjubPoint>;
+// seat -> distinct hole positions of others it has shared
+export ledger hole_shares: Map<Uint<8>, Uint<8>>;
+export ledger holes_done: Counter;
+// seat -> distinct board positions it has shared (the board releases in order, so this is
+// how far the seat has released)
+export ledger board_shares: Map<Uint<8>, Uint<8>>;
+// Showdown: seat -> proven hand score (see score5), and how many have proven.
+export ledger scores: Map<Uint<8>, Uint<64>>;
+export ledger shown: Counter;

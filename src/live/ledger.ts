@@ -44,9 +44,9 @@ export type Deployment = { address: L.ContractAddress; deploy: L.UnprovenTransac
  * nobody, the deployer included, can change the circuits. The signing key that authorised the
  * updates lives only in this call.
  */
-export async function deployInParts(network: string, constructed: RuntimeContractState, keys: VerifierKeys, params: L.LedgerParameters, ttl: Date, budget = 0.6): Promise<Deployment> {
+export async function deployInParts(network: string, constructed: RuntimeContractState, keys: VerifierKeys, params: L.LedgerParameters, ttl: Date, budget = 0.6, circuits?: readonly string[]): Promise<Deployment> {
   const declared = L.ContractState.deserialize(constructed.serialize());
-  const names = declared.operations().map(String);
+  const names = circuits ?? declared.operations().map(String);
   const vk = new Map(await Promise.all(names.map(async (n) => [n, await keys(n)] as const)));
   const authority = L.sampleSigningKey();
   const fits = (tx: L.UnprovenTransaction) => params.normalizeFullness(tx.cost(params)).bytesWritten <= budget;

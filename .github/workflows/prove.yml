@@ -28,5 +28,5 @@ jobs:
       - run: bun run compact:build --zk
       # Deployment, deposits and withdrawal applied with real proofs and signatures.
       # ci.yml skips this test because it does not generate keys.
-      - run: bun test src/live/ledger.test.ts
+      - run: bun test src/live/ledger.test.ts contracts/queue.test.ts
       - run: bun run prove:deal

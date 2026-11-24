@@ -14,12 +14,12 @@ Bun.serve({
   routes: {
     "/": index,
     ...Object.fromEntries(readdirSync(club).map(name => [`/club/${name}`, () => new Response(Bun.file(`${club}/${name}`))])),
-    "/deal/*": async (req) => {
-      const path = decodeURIComponent(new URL(req.url).pathname.slice("/deal/".length));
-      if (path.includes("..")) return new Response("no", { status: 400 });
-      const file = Bun.file(`${root}/contracts/build/deal/${path}`);
+    ...Object.fromEntries(["deal", "queue", "public-seat"].map(name => [`/${name}/*`, async (req: Request) => {
+      const path = new URL(req.url).pathname.slice(name.length + 2);
+      if (!/^(keys|zkir)\/[\w-]+\.(?:verifier|prover|bzkir|zkir)$/.test(path)) return new Response("no", { status: 404 });
+      const file = Bun.file(`${root}/contracts/build/${name}/${path}`);
       return (await file.exists()) ? new Response(file) : new Response("not built: bun run compact:build --zk", { status: 404 });
-    },
+    }])),
   },
 });
 console.log(`dust.poker on http://localhost:${port}`);

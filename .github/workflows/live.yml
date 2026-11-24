@@ -8,8 +8,12 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ledger9:
+    strategy:
+      fail-fast: false
+      matrix:
+        game: [invite, public]
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -26,8 +30,12 @@ jobs:
       - run: bun run compact:build --zk
       - run: bun run typecheck
         working-directory: local
-      - run: bun run live:check
+      - if: matrix.game == 'invite'
+        run: bun run live:check
         timeout-minutes: 25
+      - if: matrix.game == 'public'
+        run: bun local/public-draw.ts
+        timeout-minutes: 35
       - if: always()
         run: docker compose -f local/compose.yml logs --no-color
       - if: always()

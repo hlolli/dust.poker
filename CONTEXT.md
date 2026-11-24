@@ -7,7 +7,7 @@ A No-Limit Texas Hold'em table rendered as a 3D casino room in the browser (desk
 ### Play
 
 **Table**:
-One poker game in progress: its seats, its pot, and the current deal. There is one table in v1.
+One poker game in progress: its seats, its pot, and the current deal.
 _Avoid_: Room, game, lobby
 
 **Practice table**:
@@ -31,7 +31,7 @@ A human sitting at the table.
 _Avoid_: User, participant
 
 **Queue**:
-Players who have asked to play a live table and are waiting for the referee to seat them. Players never choose a table or a seat.
+Players registered for a public draw. A draw assigns their opponents and chairs. Live tables opened for friends use an invite address and grant the first available chair.
 _Avoid_: Lobby, waiting room, matchmaking
 
 **Stack**:

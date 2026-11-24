@@ -24,6 +24,7 @@
     "@midnight-ntwrk/compact-runtime": "0.21.0",
     "@midnightntwrk/ledger-v9": "1.0.2",
     "@midnightntwrk/onchain-runtime-v4": "4.0.2",
+    "drand-client": "1.4.2",
     "three": "0.186.0"
   },
   "devDependencies": {

@@ -1,8 +1,8 @@
-import { createConstructorContext } from "@midnight-ntwrk/compact-runtime";
 import * as L from "@midnightntwrk/ledger-v9";
 import { Seat } from "../referee/contract.ts";
-import { type Chain, COIN_PUBLIC_KEY, type Snapshot } from "./chain.ts";
-import { bytes, deployInParts } from "./ledger.ts";
+import { type Chain, type Snapshot } from "./chain.ts";
+import { deployInParts } from "./ledger.ts";
+import { PUBLIC_CIRCUITS, tableOpening } from "./live.ts";
 
 // A chain in memory, for tests: a ledger state that applies transactions the way a node would,
 // minus the proofs (the circuits are proven in the proof gate; here they are only run), with
@@ -36,7 +36,7 @@ export class LocalChain implements Chain {
   }
 
   /** A funded player and a freshly deployed table taking Night as its asset. */
-  static async deploy(verifierKey: (circuit: string) => Promise<Uint8Array>, night = 10_000_000n): Promise<LocalChain> {
+  static async deploy(verifierKey: (circuit: string) => Promise<Uint8Array>, night = 10_000_000n, roster?: readonly string[]): Promise<LocalChain> {
     const key = L.sampleSigningKey();
     const vk = L.signatureVerifyingKey(key);
     const me = L.addressFromKey(vk);
@@ -44,8 +44,8 @@ export class LocalChain implements Chain {
     let state = L.LedgerState.blank("undeployed").testingDistributeNight(me, night, now);
     const claim = L.ClaimRewardsTransaction.new("undeployed", night, vk, L.sampleIntentHash(), "Reward");
     state = applyTo(state, L.Transaction.fromRewards(claim.addSignature(L.signData(key, claim.dataToSign))), now);
-    const constructed = await new Seat("deployer").contract.initialState(createConstructorContext({}, COIN_PUBLIC_KEY), bytes(L.nativeToken().raw));
-    const { address, deploy, updates } = await deployInParts("undeployed", constructed.currentContractState, verifierKey, state.parameters, new Date(now.getTime() + 3_600_000));
+    const constructed = await tableOpening(new Seat("deployer"), roster);
+    const { address, deploy, updates } = await deployInParts("undeployed", constructed, verifierKey, state.parameters, new Date(now.getTime() + 3_600_000), 0.6, roster ? PUBLIC_CIRCUITS : undefined);
     for (const tx of [deploy, ...updates]) state = applyTo(state, tx.eraseProofs(), now);
     return new LocalChain(address, state, key, state.index(address)!);
   }

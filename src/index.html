@@ -129,6 +129,8 @@
       .plates .remove { margin-left: 10px; }
       .menu .row button:disabled { opacity: .6; }
       .menu .row a { font-size: 14px; }
+      .menu .invites { margin-top: 16px; }
+      .menu .invites summary { cursor: pointer; color: var(--butter); }
       .menu .table input { min-width: 0; flex: 1 1 100%; padding: 9px 12px; background: #10241e; border: 1px solid #829078; color: var(--ivory); }
       .menu .table input::placeholder { color: #aabaaa; }
       .menu .ticket span { font-size: 13px; }
@@ -346,7 +348,7 @@
       <section class="tables wrap" id="tables" aria-labelledby="tables-heading">
         <div class="room-note">
           <p class="eyebrow ruled">The tables</p><h2 id="tables-heading">Take a seat.</h2>
-          <p>Learn the room against five bots, or bring a friend to a Live table. The house band plays a different set every hour.</p>
+          <p>Learn the room against five bots, join the public draw, or open a table for friends. The house band plays a different set every hour.</p>
           <img src="./assets/site/at-the-table.jpg" alt="The in-game lounge, seen from a seat at the six-player poker table." width="850" height="496" loading="lazy" />
           <p class="bandstand"></p>
         </div>
@@ -357,7 +359,15 @@
           <section class="line live unlit" id="live-table">
             <div class="listing"><h3 class="title">Live table</h3><span class="sub status" role="status">Choose the same network as your Lace wallet.</span><span class="sub funding" hidden></span></div>
             <div class="row"><div class="network" role="group" aria-label="Midnight network"></div><button class="connect" type="button" disabled>Connect Lace</button><a href="#wallet-setup">Wallet setup</a></div>
-            <div class="row table" hidden><input name="table" aria-label="Table address" placeholder="Table address" autocomplete="off" spellcheck="false" /><button class="join" type="button">Take a seat</button><button class="deploy" type="button">Open a new table</button><button class="share" type="button" hidden>Copy table link</button></div>
+            <div class="public-seating" hidden>
+              <div class="row"><button class="find-seat" type="button">Find a public seat</button><button class="forget-draw" type="button" hidden>Leave this draw</button></div>
+              <p class="draw-status" aria-live="polite">Anyone can enter. A random draw picks your opponents.</p>
+            </div>
+            <details class="invites" hidden>
+              <summary>Play with friends</summary>
+              <p>Open a table and share its link, or join one by address. Anyone who knows the address can take an open seat.</p>
+              <div class="row table"><input name="table" aria-label="Table address" placeholder="Table address" autocomplete="off" spellcheck="false" /><button class="join" type="button">Take a seat</button><button class="deploy" type="button">Open a new table</button><button class="share" type="button" hidden>Copy table link</button></div>
+            </details>
           </section>
         </div>
       </section>
@@ -377,9 +387,12 @@
                 <p>Each move goes to Midnight. The contract checks that it follows the rules before play advances.</p>
                 <ol><li>Each player needs a separate dust.poker profile and a Ledger 9 compatible Lace wallet on the same test network. Pick Preview or Preprod. Set Lace to use a prover on your device.</li>
                   <li>Request test NIGHT at your unshielded address and select <b>Generate tDUST</b> in Lace. Allow time for tDUST to accrue for transaction fees. A seat takes 200 STAR for your stack and 200 STAR as a bond. One test NIGHT is one million STAR. <a href="https://docs.midnight.network/guides/acquire-tokens">Midnight funding guide</a></li>
-                  <li>One player selects <b>Connect Lace</b>, opens a new table, and copies its link. Everyone opens the same invite and chooses <b>Take a seat</b>, including the host. Play begins with two seated players.</li>
+                  <li>One player selects <b>Connect Lace</b>, expands <b>Play with friends</b>, opens a new table, and copies its link. Everyone opens the same invite and chooses <b>Take a seat</b>, including the host. Play begins with two seated players.</li>
                   <li>Keep the tab open for wallet prompts. To withdraw, choose <b>Cash out</b> and wait for <b>Seat closed</b>. Returning to the menu leaves your chips at the table. Keep your browser profile until you have withdrawn.</li></ol>
                 <p><a href="#tables">Choose a table</a> · <a href="https://github.com/hlolli/dust.poker#play-with-colleagues">Network and Lace settings</a></p>
+                <h4>Play with people drawn from the public queue</h4>
+                <p>Connect Lace and choose <b>Find a public seat</b>. Entries close every five minutes. With four or more entrants, the draw makes at least two tables of two to six players. With fewer, you can try a later draw. Entering costs a network fee. Your buy-in stays in your wallet until you accept your seat.</p>
+                <p>One player at each table is drawn to open it. Come back with the same browser profile to take your seat or withdraw your chips. The first deal waits for everyone assigned to arrive. You can cash out while waiting. If someone withdraws before everyone arrives, that table closes to further buy-ins and each seated player can cash out.</p>
               </div>
             </article>
             <article class="chapter" aria-labelledby="proofs">
@@ -387,10 +400,12 @@
               <div class="chapter-body">
                 <h4>What does a shuffle prove?</h4><p>Live players publish fresh Jubjub public keys. Their sum is the ElGamal key for the deck. In seat order, each player privately permutes all 52 ciphertexts and re-encrypts them. The Compact <code>shuffle</code> circuit checks the permutation with a Poseidon-derived grand product and checks the re-encryption of every card.</p>
                 <p>A valid permutation may be predictable. Deck randomness relies on at least one player choosing a fresh, uniform secret shuffle. Players can still share information outside the game. Use a prover you control because it receives the private inputs.</p>
+                <h4>Who picks my opponents?</h4>
+                <p>In a public draw, the Midnight queue fixes the entrants before a scheduled drand quicknet round. Your browser verifies the beacon signature and computes the same groups as the other players. It checks the assigned roster against the table’s locked opening before buying in. Friends can still exchange information or enter with multiple profiles. A player who stays away can delay their table. <a href="https://docs.drand.love/">How drand works</a></p>
                 <h4>Who can read what?</h4><p>For a hole card, the other seats publish decryption shares. The holder supplies the last share locally. For board cards the required shares become public street by street. Stacks, bets and transaction timing are public.</p>
                 <p>At a normal showdown, <code>show_hand</code> verifies the score of five distinct cards chosen from seven. The client picks its best five. The public score and board can narrow down which cards were held. If betting ends all-in before the board runs out, the remaining hands are tabled.</p>
                 <h4>How does the pot settle?</h4><p><code>settle</code> checks eligibility in each side pot, ties, odd-chip order and conservation of the pot. Missed betting deadlines can trigger a fold. Missing a required protocol step can cost a seat its bond. The indexer reports state and transactions. Midnight verifies the contract calls.</p>
-                <h4>Reproduce the checks</h4><p>From a checkout with Bun installed, run the contract tests, generate the keys, then prove a complete set of calls. The proof gate covers all 19 state-changing circuits.</p>
+                <h4>Reproduce the checks</h4><p>From a checkout with Bun installed, run the contract tests, generate the keys, then prove a complete set of calls. CI proves the 19 invite-table operations, public registration, table announcements and reserved-seat claims.</p>
                 <pre><code>bun install --frozen-lockfile
 bun run check
 bun run compact:build --zk

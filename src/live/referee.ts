@@ -204,7 +204,7 @@ export class LiveReferee implements Referee {
       if (kept && kept.dealNo === l.deal_no) {
         this.seat.x = kept.x;
         this.seat.nextX = kept.nextX;
-      } else if (l.phase >= Phase.keys && l.phase !== Phase.idle) {
+      } else if (l.phase >= Phase.keys && l.phase !== Phase.reserved) {
         if (kept && kept.dealNo + 1n === l.deal_no) this.seat.nextX = kept.nextX;
         this.seat.rotate(prepared);
       }
@@ -223,7 +223,10 @@ export class LiveReferee implements Referee {
     if (l.phase === Phase.done && !this.doneSince) {
       ({ message: this.message, winners: this.winners } = outcome(l, this.names, this.you, this.stackBefore));
       this.doneSince = Date.now();
-    } else if (l.phase === Phase.aborted) this.message = "Deal aborted";
+    } else if (l.phase === Phase.reserved) this.message = l.payout_address.size() < l.n_players
+      ? "A drawn player left before the first deal. Cash out to enter another draw."
+      : `Waiting for drawn players · ${occupied(l).length} of ${l.n_players} seated`;
+    else if (l.phase === Phase.aborted) this.message = "Deal aborted";
     else if (l.phase === Phase.shuffle) this.message = `${this.names[Number(l.turn)]} shuffles`;
     else if (l.phase < Phase.playing) this.message = "Dealing";
     else if (l.phase === Phase.tabling) this.message = "Hands are tabled";

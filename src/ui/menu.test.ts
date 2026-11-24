@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { chromium } from "playwright-core";
+import { LedgerParameters } from "@midnightntwrk/ledger-v9";
 
 function serveSite() {
   const dist = new URL("../../dist/", import.meta.url);
@@ -59,7 +60,8 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     const indexer = "indexer.preview.midnight.network/api/v4/graphql";
     let status = 403;
     let allowSocket = false;
-    await page.route(`https://${indexer}`, route => route.fulfill({ status, json: { data: { block: { protocolVersion: 2_001_100 } } } }));
+    const ledgerParameters = Buffer.from(LedgerParameters.initialParameters().serialize()).toString("hex");
+    await page.route(`https://${indexer}`, route => route.fulfill({ status, json: { data: { block: { protocolVersion: 2_001_100, height: 3, hash: "01".repeat(32), timestamp: Date.now(), ledgerParameters }, contractAction: null } } }));
     await page.routeWebSocket(`wss://${indexer}/ws`, ws => ws.onMessage(() => {
       if (allowSocket) ws.send('{"type":"connection_ack"}');
       else ws.close({ code: 4403, reason: "denied" });
@@ -87,6 +89,16 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     await connect.click();
     await page.getByRole("status").filter({ hasText: "Switch Test Lace to preprod" }).waitFor();
     expect(await join.isVisible()).toBe(false);
+    await page.evaluate(() => localStorage.setItem("dust.poker/profiles", JSON.stringify({ active: "a", list: [{ id: "a", name: "Alice", secret: "7", model: 0 }] })));
+    await page.goto(`${site.url.href}?network=preview&fx=off`);
+    await connect.click();
+    const find = page.getByRole("button", { name: "Find a public seat" });
+    await find.waitFor();
+    expect(await page.getByLabel("Table address").isVisible()).toBe(false);
+    await find.click();
+    await page.getByRole("button", { name: "Open the public queue" }).waitFor();
+    await page.getByText("Play with friends", { exact: true }).click();
+    expect(await page.getByLabel("Table address").isVisible()).toBe(true);
   } finally {
     await browser.close();
     site.stop(true);

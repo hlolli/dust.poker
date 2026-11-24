@@ -52,16 +52,20 @@ export async function callOn(chain: Chain, snap: Snapshot, seat: Seat, circuit: 
 // there). Only a local development page may override the keys used to authenticate a table.
 export const keysBase = (page: Pick<Location, "hostname" | "search">) =>
   (isLocalSite(page.hostname) && new URLSearchParams(page.search).get("keys")) || "/deal";
-const fetchBytes = async (path: string) => {
-  const res = await fetch(`${keysBase(location)}/${path}`);
+const fetchBytes = async (circuit: string, path: string) => {
+  const contract = circuit === "claim_seat" ? "public-seat" :
+    circuit === "enter_queue" || circuit === "announce_table" ? "queue" : "deal";
+  const base = keysBase(location);
+  const url = contract === "deal" ? base : base.slice(0, base.lastIndexOf("/") + 1) + contract;
+  const res = await fetch(`${url}/${path}`);
   if (!res.ok) throw new Error(`proving keys: ${path} ${res.status}`);
   return new Uint8Array(await res.arrayBuffer());
 };
 export const keyMaterial: KeyMaterialProvider = {
   // The released prover and proof server consume the tagged binary ZKIR v3 representation.
-  getZKIR: (c) => fetchBytes(`zkir/${c}.bzkir`),
-  getProverKey: (c) => fetchBytes(`keys/${c}.prover`),
-  getVerifierKey: (c) => fetchBytes(`keys/${c}.verifier`),
+  getZKIR: (c) => fetchBytes(c, `zkir/${c}.bzkir`),
+  getProverKey: (c) => fetchBytes(c, `keys/${c}.prover`),
+  getVerifierKey: (c) => fetchBytes(c, `keys/${c}.verifier`),
 };
 
 async function walletProver(w: Wallet): Promise<L.ProvingProvider> {

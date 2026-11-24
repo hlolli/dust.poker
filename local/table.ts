@@ -57,7 +57,7 @@ async function waitFor(ok: () => Promise<boolean>, what: string, ms = 180_000) {
   throw new Error(`timed out waiting for ${what}`, { cause: last });
 }
 
-async function ready() {
+export async function ready() {
   await waitFor(async () => {
     const response = await fetch("http://127.0.0.1:9944", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "midnight_ledgerVersion", params: [] }), signal: AbortSignal.timeout(5000) });
     const version = await response.json() as { result?: string; error?: unknown };
@@ -126,6 +126,15 @@ async function main() {
   const jb = await live.joinTable(bob, pb, address);
   console.log(`  seat ${jb.seat.index}`);
 
+  await playThroughShowdown(ja, jb);
+  await waitFor(async () => (await alice.nightBalance()) + (await bob.nightBalance()) === initialNight, "both stacks and bonds to return to the wallets");
+  console.log("Ledger 9 end-to-end passed: deployed, dealt every street, settled, withdrew; Night conserved, fees paid in DUST.");
+  await Promise.all([alice.close(), bob.close()]);
+}
+
+type Joined = Awaited<ReturnType<typeof import("../src/live/live.ts").joinTable>>;
+
+export async function playThroughShowdown(ja: Joined, jb: Joined) {
   console.log("the deal: keys, shuffles, shares, every street, showdown, then withdrawal");
   const a = new LiveReferee(ja.chain, ja.seat, { betweenDeals: 3_600_000, store: memoryStore() });
   const b = new LiveReferee(jb.chain, jb.seat, { betweenDeals: 3_600_000, store: memoryStore() });
@@ -182,9 +191,6 @@ async function main() {
 
   const emptied = await ja.chain.snapshot();
   assert.equal([...emptied.state!.balance.values()].reduce((a, b) => a + b, 0n), 0n);
-  await waitFor(async () => (await alice.nightBalance()) + (await bob.nightBalance()) === initialNight, "both stacks and bonds to return to the wallets");
-  console.log("Ledger 9 end-to-end passed: deployed, dealt every street, settled, withdrew; Night conserved, fees paid in DUST.");
-  await Promise.all([alice.close(), bob.close()]);
 }
 
-main().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });
+if (import.meta.main) main().then(() => process.exit(0), (e) => { console.error(e); process.exit(1); });
