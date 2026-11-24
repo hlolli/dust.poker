@@ -26,12 +26,10 @@ export type Attention = {
   others: THREE.Vector3[];
   /** It is this character's own turn: they look at their cards and the pot, thinking. */
   deciding: boolean;
-  /**
-   * Out of the hand (folded, or between deals), holding nothing: they look about the room more,
-   * and turn their shoulders into it. Holding cards, the body stays square, or the cards (which
-   * hang from the body's root, not the hands) would part from the hands.
-   */
+  /** A player resting between actions can look around the room. */
   idle?: boolean;
+  /** The fingers are in contact with a card or the table, or moving into that pose. */
+  handsPlanted?: boolean;
 };
 
 type Expression = { shapes: [string, number][]; start: number; rise: number; hold: number; fall: number };
@@ -122,7 +120,7 @@ export class Life {
 
     // Your own body stays still: the camera is in it, and your hands are in view. Seated players
     // go still while they hold their cards, which hang from the body's root, not the hands.
-    this.body = this.looks ? damp(this.body, this.standing || attention.idle ? 1 : 0, 3, dt) : 0;
+    this.body = this.looks && (this.standing || (attention.idle && !attention.handsPlanted)) ? damp(this.body, 1, 3, dt) : 0;
     // Breathing: the chest rises and opens a little, the shoulders lift with it when standing.
     const breath = Math.sin(t * this.breath * Math.PI * 2) * this.body;
     turn(a, "Bip01 Spine2", X, -0.7 * breath);
@@ -176,22 +174,21 @@ export class Life {
     this.head.pitch = damp(this.head.pitch, pitch * 0.7, 4, dt);
     this.eyes.yaw = damp(this.eyes.yaw, yaw - this.head.yaw + this.saccade.yaw, 30, dt);
     this.eyes.pitch = damp(this.eyes.pitch, pitch - this.head.pitch + this.saccade.pitch, 30, dt);
-    // Neck and head share the turn; the pitch is about the head's own side-to-side axis. The
-    // Biped rig hangs the collarbones from the neck, so they are held where they were in the
-    // world: turning to look must not swing the arms, and the cards with them.
-    // At rest the chest follows the look for a share of it, easing in and out like the head.
-    this.torso = damp(this.torso, at.idle ? 0.3 : 0, 1.5, dt);
+    // The neck and head share the turn. The chest can follow when the hands are free.
+    this.torso = at.idle && !at.handsPlanted ? damp(this.torso, 0.3, 1.5, dt) : 0;
     turn(a, "Bip01 Spine1", Y, this.head.yaw * this.torso * DEG);
     const rest = 1 - this.torso;
     const neck = a.bones.get("Bip01 Neck");
-    const collars = ["Bip01 L Clavicle", "Bip01 R Clavicle"].map((n) => a.bones.get(n)).filter((b): b is THREE.Bone => !!b);
+    // The house cast's clavicles are siblings of the neck. Only older rigs
+    // with clavicles parented to the neck need to undo its turn.
+    const collars = ["Bip01 L Clavicle", "Bip01 R Clavicle"].map((n) => a.bones.get(n)).filter((b): b is THREE.Bone => !!b && b.parent === neck);
     const held = collars.map((c) => c.getWorldQuaternion(new THREE.Quaternion()));
     turn(a, "Bip01 Neck", Y, this.head.yaw * 0.4 * rest * DEG);
     turn(a, "Bip01 Head", Y, this.head.yaw * 0.6 * rest * DEG);
     const side = new THREE.Vector3(Math.sin(this.head.yaw), 0, Math.cos(this.head.yaw)).cross(Y);
     turn(a, "Bip01 Neck", side, this.head.pitch * 0.3 * DEG);
     turn(a, "Bip01 Head", side, this.head.pitch * 0.7 * DEG);
-    if (neck?.parent) {
+    if (collars.length && neck?.parent) {
       const neckWorld = neck.parent.getWorldQuaternion(new THREE.Quaternion()).multiply(neck.quaternion);
       collars.forEach((c, i) => c.quaternion.copy(neckWorld.clone().invert().multiply(held[i]!)));
     }

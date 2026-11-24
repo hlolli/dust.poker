@@ -3,6 +3,7 @@ import { brass, darkWood, felt, railLeather } from "./materials.ts";
 
 export const SEAT_COUNT = 6;
 export const TABLE_RADIUS = 1.1;
+export const FELT_TOP = 0.78;
 /** Distance from table centre to where a seated body sits. */
 export const SEAT_RADIUS = 1.6;
 /** Eye height of a seated adult; XR headsets override it. */
@@ -36,7 +37,7 @@ export function createTable(): THREE.Group {
   const wood = darkWood(2);
 
   const top = new THREE.Mesh(new THREE.CylinderGeometry(TABLE_RADIUS, TABLE_RADIUS, 0.06, 64), baize);
-  top.position.y = 0.75;
+  top.position.y = FELT_TOP - 0.03;
   g.add(top);
 
   // Wrap the grain to scale around the whole rail. A single trip around the torus

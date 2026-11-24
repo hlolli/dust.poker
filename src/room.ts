@@ -6,7 +6,7 @@ import { texturesReady } from "./scene/materials.ts";
 import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
 import type { Action, Referee, TableState } from "./referee/types.ts";
 import { createSeat } from "./scene/avatar.ts";
-import { type Avatar, cardAnchor, dealerReach, drawIn, eyePosition, loadAvatar, poseDealer, poseHands, poseSeated, poseStanding, poseWalking, showOwnHead } from "./scene/avatars.ts";
+import { type Avatar, cardAnchor, dealerReach, drawIn, eyePosition, loadAvatar, poseDealer, poseSeated, poseStanding, poseWalking, showOwnHead } from "./scene/avatars.ts";
 import { Manner } from "./scene/manner.ts";
 import { Cinema, SHOTS } from "./scene/cinema.ts";
 import { type Attention, Life } from "./scene/life.ts";
@@ -327,7 +327,6 @@ export async function enterRoom(entry: Entry) {
     avatar.root.position.copy(inFront);
     avatar.root.rotation.y = facingTable;
     poseSeated(avatar, 0.5);
-    poseHands(avatar, "rail", LIFT);
     seatedY = avatar.root.position.y;
   }
 
@@ -363,8 +362,6 @@ export async function enterRoom(entry: Entry) {
       const now = performance.now();
       pot = { start: now, ms, piles };
       for (const { seat } of piles) {
-        // Cards out of the hands first, face up if they were shown, so the hands are free for the chips.
-        tableView.placeCards(seat, true, 380, tableState?.seats[seat]?.hole != null && seat !== YOU);
         manners[seat]?.busy(now + ms + 200);
       }
       if (renderer.xr.isPresenting) return;
@@ -393,10 +390,9 @@ export async function enterRoom(entry: Entry) {
     scene.add(tableView.group, rail.group);
     attachCards = (i, avatar) => {
       const lift = i === YOU ? LIFT : 0;
-      poseHands(avatar, "hold", lift); // the anchor is measured from the hands, so pose them first
       tableView.attachHoleCards(i, cardAnchor(avatar, lift));
       // From here on the seat's manner (scene/manner.ts) handles its cards and arms.
-      manners[i] = new Manner(avatar, i, tableView, i === YOU, lift);
+      manners[i] = new Manner(avatar, i, tableView, i === YOU);
     };
     avatars.forEach((a, i) => a && attachCards!(i, a));
     onSelect = rail.onSelect;
@@ -494,7 +490,7 @@ export async function enterRoom(entry: Entry) {
     // Out of the hand and holding nothing: folded, or between deals. The staff are always at work.
     const me = seat >= 0 ? tableState?.seats[seat] : undefined;
     const idle = !!me && !!manners[seat]?.idle;
-    return { focus, others, deciding: seat >= 0 && tableState?.toAct === seat, idle };
+    return { focus, others, deciding: seat >= 0 && tableState?.toAct === seat, idle, handsPlanted: manners[seat]?.handsPlanted };
   }
 
   /** A smile for the winners when a deal ends, a frown for those who lost at the showdown or folded. */

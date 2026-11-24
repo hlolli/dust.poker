@@ -1,13 +1,17 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+import { CARD_H, CARD_W } from "./cards.ts";
 import { MODELS, STAFF } from "./models.ts";
-import { RAIL_RADIUS, RAIL_TOP, SEAT_RADIUS } from "./table.ts";
+import { FELT_TOP, RAIL_RADIUS, RAIL_TOP, SEAT_RADIUS } from "./table.ts";
 
 // The house cast and older Rocketbox characters share Biped bone names and ARKit face shapes.
 
 export interface Avatar {
   root: THREE.Group;
   bones: Map<string, THREE.Bone>;
+  /** Joints used for seated hand poses, including the spine for a reach across the rail. */
+  seatRest: Map<THREE.Bone, THREE.Quaternion>;
+  seatedShoulders?: THREE.Vector3;
   mesh: THREE.SkinnedMesh;
   /** Attach things to a hand here: the palm of the right or left hand. */
   hand(side: "L" | "R"): THREE.Bone;
@@ -24,10 +28,15 @@ export async function loadAvatar(url: string): Promise<Avatar> {
   const gltf = await loader.loadAsync(url);
   const root = gltf.scene;
   const bones = new Map<string, THREE.Bone>();
+  const seatRest = new Map<THREE.Bone, THREE.Quaternion>();
   let mesh: THREE.SkinnedMesh | undefined;
   root.traverse((o) => {
     // The glTF exporter writes "Bip01 L Thigh" as "Bip01_L_Thigh"; key bones by the Biped name.
-    if ((o as THREE.Bone).isBone) bones.set(o.name.replace(/_/g, " "), o as THREE.Bone);
+    if (o instanceof THREE.Bone) {
+      const name = o.name.replace(/_/g, " ");
+      bones.set(name, o);
+      if (name === "Bip01 Spine" || /^Bip01 [LR] (UpperArm|Forearm|Hand|Finger\d+)$/.test(name)) seatRest.set(o, o.quaternion.clone());
+    }
     if ((o as THREE.SkinnedMesh).isSkinnedMesh) mesh = o as THREE.SkinnedMesh;
   });
   cutOut(root);
@@ -64,6 +73,7 @@ export async function loadAvatar(url: string): Promise<Avatar> {
   return {
     root,
     bones,
+    seatRest,
     mesh: m,
     hand: (side) => bone(`Bip01 ${side} Hand`),
     face: (name, weight) => {
@@ -138,11 +148,7 @@ function aim(avatar: Avatar, boneName: string, childName: string, dirRoot: THREE
   const rootWorld = new THREE.Quaternion();
   avatar.root.getWorldQuaternion(rootWorld);
   const desired = dirRoot.clone().normalize().applyQuaternion(rootWorld);
-  const q = new THREE.Quaternion().setFromUnitVectors(current, desired); // world space
-  const pw = new THREE.Quaternion();
-  b.parent.getWorldQuaternion(pw);
-  const local = pw.clone().invert().multiply(q).multiply(pw); // same rotation, parent space
-  b.quaternion.premultiply(local);
+  rotateToward(b, current, desired);
 }
 
 /** Like `aim`, toward a point given in root space. */
@@ -209,21 +215,64 @@ function beforeSeat(avatar: Avatar, out: number, across: number, y: number): THR
 /** Where a relaxed seated or standing elbow goes: down, out to its side, a little back. */
 const elbowPole = (s: number) => new THREE.Vector3(s * 0.6, -1, -0.25);
 
-/**
- * Sits the avatar on a chair whose seat is at `seatHeight`, facing +z in root space:
- * thighs forward, shins down, upper arms down and a little forward, forearms in to a hand
- * target just in front of the chest, where the cards are held.
- */
+/** How far to lean at the waist to reach a wrist target without stretching the arm. */
+function leanForWrist(a: Avatar, side: "L" | "R", target: THREE.Vector3) {
+  const upper = a.bones.get(`Bip01 ${side} UpperArm`), fore = a.bones.get(`Bip01 ${side} Forearm`), spine = a.bones.get("Bip01 Spine");
+  if (!upper || !fore || !spine) return 0;
+  const local = (b: THREE.Bone) => a.root.worldToLocal(b.getWorldPosition(new THREE.Vector3()));
+  const shoulder = local(upper), elbow = local(fore), pivot = local(spine);
+  const length = shoulder.distanceTo(elbow) + elbow.distanceTo(local(a.hand(side))) - 0.004;
+  if (shoulder.distanceTo(target) <= length) return 0;
+  const offset = shoulder.sub(pivot), to = target.clone().sub(pivot);
+  let low = 0, high = 42;
+  for (let i = 0; i < 7; i++) {
+    const angle = (low + high) * 0.5;
+    if (offset.clone().applyAxisAngle(X, THREE.MathUtils.degToRad(angle)).distanceTo(to) > length) low = angle;
+    else high = angle;
+  }
+  return high;
+}
+
+type WristTarget = { side: "L" | "R"; target: THREE.Vector3; rotation: THREE.Quaternion };
+
+function reachWrists(a: Avatar, wrists: WristTarget[]) {
+  if (!wrists.length) return;
+  const lean = Math.max(...wrists.map(w => leanForWrist(a, w.side, w.target)));
+  turn(a, "Bip01 Spine", X, lean);
+  for (const { side, target, rotation } of wrists) {
+    reach(a, side, target, elbowPole(side === "L" ? 1 : -1));
+    const wrist = a.hand(side);
+    wrist.quaternion.copy(wrist.parent!.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(rotation));
+  }
+}
+
+/** Move a wrist past the cushion on the way between the felt and a folded arm or lap. */
+export function passRail(a: Avatar, side: "L" | "R", start: THREE.Vector3, end: THREE.Vector3, t: number) {
+  // Lift a tucked hand on the player's side before reaching over the rail.
+  const raised = (at: THREE.Vector3) => {
+    const control = at.clone();
+    control.y = Math.max(control.y, RAIL_TOP + 0.25);
+    if (Math.hypot(at.x, at.z) > RAIL_RADIUS) control.addScaledVector(new THREE.Vector3(at.x, 0, at.z).normalize(), 0.26);
+    return control;
+  };
+  const target = new THREE.CubicBezierCurve3(start, raised(start), raised(end), end).getPoint(t);
+  const wrist = a.hand(side);
+  const rotation = wrist.getWorldQuaternion(new THREE.Quaternion());
+  const upper = a.bones.get(`Bip01 ${side} UpperArm`), fore = a.bones.get(`Bip01 ${side} Forearm`);
+  if (!upper || !fore) return;
+  const elbow = a.root.worldToLocal(fore.getWorldPosition(new THREE.Vector3()));
+  const shoulder = a.root.worldToLocal(upper.getWorldPosition(new THREE.Vector3()));
+  reach(a, side, a.root.worldToLocal(target), elbow.sub(shoulder));
+  wrist.quaternion.copy(wrist.parent!.getWorldQuaternion(new THREE.Quaternion()).invert().multiply(rotation));
+}
+
+/** Seat the avatar facing +z, with thighs forward, shins down and hands on the rail. */
 export function poseSeated(avatar: Avatar, seatHeight = 0.5) {
   avatar.root.updateMatrixWorld(true);
-  const chest = shoulders(avatar);
   for (const side of ["L", "R"] as const) {
     const s = side === "L" ? 1 : -1; // facing +z, the character's left is +x
     aim(avatar, `Bip01 ${side} Thigh`, `Bip01 ${side} Calf`, new THREE.Vector3(s * 0.1, -0.12, 1));
     aim(avatar, `Bip01 ${side} Calf`, `Bip01 ${side} Foot`, new THREE.Vector3(0, -1, 0.15));
-    // Hands at chest height, a forearm's length out: where cards are held to be read, and
-    // where a first-person camera at the eyes sees them without looking straight down.
-    reach(avatar, side, chest.clone().add(new THREE.Vector3(s * 0.07, -0.16, 0.34)), elbowPole(s));
   }
   turn(avatar, "Bip01 Spine1", X, 8);
   turn(avatar, "Bip01 Head", X, 10);
@@ -234,10 +283,11 @@ export function poseSeated(avatar: Avatar, seatHeight = 0.5) {
     pelvis.getWorldPosition(standing);
     avatar.root.position.y -= standing.y - avatar.root.position.y - seatHeight - 0.08;
   }
+  avatar.seatedShoulders = shoulders(avatar);
+  poseHands(avatar, "rail");
   avatar.root.updateMatrixWorld(true);
 }
 
-/** How a seated player rests with no cards to hold: hands apart on the rail, or arms crossed. */
 /**
  * What a seated player's arms are doing. `hold`: the cards up in both hands before the chest,
  * read. `rail`: hands apart on the rail. `crossed`: arms folded. `cover`: the right hand resting
@@ -246,25 +296,15 @@ export function poseSeated(avatar: Avatar, seatHeight = 0.5) {
 export type ArmPose = "hold" | "rail" | "crossed" | "cover" | "lap";
 
 /**
- * Poses a seated player's arms. `cards` (world space) is where cards lie on the felt, for
- * `cover`. Re-aims the arms and fingers only, from scratch each time, so it can follow the deal.
+ * Pose the arms from their seated rest rotations. For a cover, the right middle finger
+ * reaches for the card at `cards` in world space.
  */
-export function poseHands(avatar: Avatar, pose: ArmPose, lift = 0, cards?: THREE.Vector3) {
-  avatar.root.updateMatrixWorld(true);
+export function poseHands(avatar: Avatar, pose: Exclude<ArmPose, "hold">, cards?: THREE.Vector3) {
+  for (const [bone, rest] of avatar.seatRest) bone.quaternion.copy(rest);
   const chest = shoulders(avatar);
-  const holding = pose === "hold";
+  const wrists: WristTarget[] = [];
   for (const side of ["L", "R"] as const) {
     const s = side === "L" ? 1 : -1;
-    if (pose === "cover" && side === "R" && cards) {
-      // The wrist on the rail in line with the cards, the fingers out over their near edge: the
-      // cards lie just inside the rail, out of reach of a hand that would have to go through it.
-      const on = avatar.root.worldToLocal(cards.clone().add(new THREE.Vector3(0, RAIL_TOP - cards.y + 0.01, 0)));
-      reach(avatar, side, beforeSeat(avatar, SEAT_RADIUS - RAIL_RADIUS, 0, RAIL_TOP + 0.035).setX(on.x), elbowPole(s));
-      aimAt(avatar, `Bip01 ${side} Hand`, `Bip01 ${side} Finger2`, on);
-      palmUp(avatar, side, -1);
-      curl(avatar, side, 25);
-      continue;
-    }
     if (pose === "lap") {
       reach(avatar, side, chest.clone().add(new THREE.Vector3(s * 0.12, -0.5, 0.26)), elbowPole(s));
       curl(avatar, side, 30);
@@ -279,19 +319,32 @@ export function poseHands(avatar: Avatar, pose: ArmPose, lift = 0, cards?: THREE
       curl(avatar, side, 55);
       continue;
     }
-    if (!holding) {
-      // On the rail: the wrists on top of it, the hands level and turned a little in, clear of the wood.
-      reach(avatar, side, beforeSeat(avatar, SEAT_RADIUS - RAIL_RADIUS, s * 0.17, RAIL_TOP + 0.03), elbowPole(s));
-      aim(avatar, `Bip01 ${side} Hand`, `Bip01 ${side} Finger2`, new THREE.Vector3(-s * 0.3, -0.2, 1));
-      palmUp(avatar, side, -1);
-      curl(avatar, side, 8);
-      continue;
+    const covering = pose === "cover" && side === "R" && cards;
+    aim(avatar, `Bip01 ${side} Hand`, `Bip01 ${side} Finger2`, new THREE.Vector3(-s * (covering ? 0.75 : 0.25), covering ? -0.55 : 0.20, 1));
+    palmUp(avatar, side, -1);
+    curl(avatar, side, covering ? 3 : 8);
+    if (covering) {
+      // Open the thumb alongside the fingers. A relaxed thumb hangs below the
+      // palm and would pass through the cushion while the middle finger covers the card.
+      const thumb = avatar.bones.get(`Bip01 ${side} Finger0`);
+      const tip = avatar.bones.get(`Bip01 ${side} Finger02`);
+      const p = palm(avatar, side);
+      if (thumb && tip && p) {
+        const from = fingerPad(tip).sub(thumb.getWorldPosition(new THREE.Vector3())).normalize();
+        const normal = new THREE.Vector3(0, 1, 0).applyQuaternion(p.quaternion);
+        rotateToward(thumb, from, from.clone().addScaledVector(normal, -from.dot(normal)).normalize());
+      }
     }
-    curl(avatar, side, 30);
-    // `lift` raises held cards and holds them a little further out: the first-person player reads them past the thumbs at a comfortable distance.
-    reach(avatar, side, chest.clone().add(new THREE.Vector3(s * 0.07, -0.16 + lift * 2, 0.34 + lift * 1.4)), elbowPole(s));
+    const wrist = avatar.hand(side);
+    const tip = avatar.bones.get(`Bip01 ${side} Finger22`);
+    const target = beforeSeat(avatar, SEAT_RADIUS - RAIL_RADIUS + 0.028, s * 0.17, RAIL_TOP + 0.020);
+    if (covering && tip) {
+      const contact = covering.clone().add(new THREE.Vector3(0, 0.009, 0.025).applyQuaternion(avatar.root.getWorldQuaternion(new THREE.Quaternion())));
+      target.copy(avatar.root.worldToLocal(wrist.getWorldPosition(new THREE.Vector3()).add(contact.sub(fingerPad(tip)))));
+    }
+    wrists.push({ side, target, rotation: wrist.getWorldQuaternion(new THREE.Quaternion()) });
   }
-  avatar.root.updateMatrixWorld(true);
+  reachWrists(avatar, wrists);
 }
 
 /**
@@ -326,7 +379,7 @@ export function curl(avatar: Avatar, side: "L" | "R", degrees: number) {
     const b = avatar.bones.get(`Bip01 ${side} Finger${n}${k}`);
     if (b) fingers.push(b);
   }
-  for (const b of fingers) b.quaternion.copy((b.userData.rest ??= b.quaternion.clone()) as THREE.Quaternion);
+  for (const b of fingers) b.quaternion.copy(avatar.seatRest.get(b)!);
   const p = palm(avatar, side);
   if (!p) return;
   // Toward the palm: about the axis across the knuckles, turning the fingers' run toward the palm's normal.
@@ -338,6 +391,77 @@ export function curl(avatar: Avatar, side: "L" | "R", degrees: number) {
     const q = new THREE.Quaternion().setFromAxisAngle(axis, THREE.MathUtils.degToRad(thumb ? degrees / 3 : degrees));
     b.quaternion.premultiply(parent.clone().invert().multiply(q).multiply(parent));
   }
+}
+
+/** Midway along the pad of the distal phalanx on the exported Biped fingers. */
+function fingerPad(tip: THREE.Bone) {
+  return tip.localToWorld(new THREE.Vector3(0, tip.position.length() * 0.7, 0));
+}
+
+function rotateToward(bone: THREE.Bone, from: THREE.Vector3, to: THREE.Vector3) {
+  const parent = bone.parent!.getWorldQuaternion(new THREE.Quaternion());
+  bone.quaternion.premultiply(parent.clone().invert().multiply(new THREE.Quaternion().setFromUnitVectors(from, to)).multiply(parent));
+}
+
+// The pinch is rigid in wrist space. Measure it once on each hand so a longer
+// thumb or a shorter index finger changes where the wrist goes, not the card.
+function measureGrip(a: Avatar, side: "L" | "R") {
+  const wrist = a.hand(side);
+  const thumb = a.bones.get(`Bip01 ${side} Finger0`);
+  const thumbTip = a.bones.get(`Bip01 ${side} Finger02`);
+  const indexTip = a.bones.get(`Bip01 ${side} Finger12`);
+  const frame = palm(a, side);
+  if (!thumb?.parent || !thumbTip || !indexTip || !frame) return;
+  curl(a, side, 32);
+  const index = fingerPad(indexTip);
+  const origin = thumb.getWorldPosition(new THREE.Vector3());
+  const from = fingerPad(thumbTip).sub(origin).normalize();
+  const across = new THREE.Vector3(side === "L" ? 1 : -1, 0, 0).applyQuaternion(frame.quaternion);
+  const to = index.clone().addScaledVector(across, 0.012).sub(origin).normalize();
+  rotateToward(thumb, from, to);
+
+  const finger = wrist.worldToLocal(index);
+  const opposed = wrist.worldToLocal(fingerPad(thumbTip));
+  const point = finger.clone().lerp(opposed, 0.5);
+  const normal = opposed.sub(finger).normalize();
+  const fingers = [...a.seatRest.keys()].filter(b => b.name.replace(/_/g, " ").startsWith(`Bip01 ${side} Finger`));
+  return { point, inverseFrame: gripFrame(normal, point).invert(), fingers: fingers.map(b => ({ bone: b, rotation: b.quaternion.clone() })) };
+}
+
+function gripFrame(normal: THREE.Vector3, along: THREE.Vector3) {
+  const x = new THREE.Vector3().crossVectors(along, normal).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, normal.clone().cross(x), normal));
+}
+
+const grips = new WeakMap<THREE.Bone, ReturnType<typeof measureGrip>>();
+
+/** Put opposing finger pads on the two surfaces at the outside edge of each card. */
+export function holdCards(avatar: Avatar, cards: readonly THREE.Object3D[]) {
+  for (const [bone, rest] of avatar.seatRest) bone.quaternion.copy(rest);
+  const wrists: WristTarget[] = [];
+  for (const [k, side] of (["L", "R"] as const).entries()) {
+    const card = cards[k];
+    if (!card) continue;
+    const s = side === "L" ? 1 : -1;
+    const wrist = avatar.hand(side);
+    if (!grips.has(wrist)) grips.set(wrist, measureGrip(avatar, side));
+    const grip = grips.get(wrist);
+    if (!grip || !wrist.parent) continue;
+    for (const { bone, rotation } of grip.fingers) bone.quaternion.copy(rotation);
+    const contact = card.localToWorld(new THREE.Vector3(-s * (CARD_W / 2 - 0.006), -CARD_H * 0.23, 0));
+    const facing = avatar.root.getWorldQuaternion(new THREE.Quaternion());
+    const low = 1 - THREE.MathUtils.smoothstep(contact.y, FELT_TOP + 0.035, RAIL_TOP + 0.065);
+    // Slip the pads around the edge as the card meets the felt. Pitch the
+    // wrist up over the cushion so neither the thumb nor the palm goes through it.
+    const normal = card.getWorldDirection(new THREE.Vector3()).lerp(new THREE.Vector3(-s, 0, 0).applyQuaternion(facing), low).normalize();
+    const along = new THREE.Vector3(-s * 0.8, 0.45 - 2.8 * low, 1).applyQuaternion(facing);
+    contact.y = Math.max(contact.y, FELT_TOP + 0.014);
+    const rotation = gripFrame(normal, along).multiply(grip.inverseFrame);
+    const offset = grip.point.clone().multiply(wrist.getWorldScale(new THREE.Vector3())).applyQuaternion(rotation);
+    const target = avatar.root.worldToLocal(contact.sub(offset));
+    wrists.push({ side, rotation, target });
+  }
+  reachWrists(avatar, wrists);
 }
 
 /** Turns a hand about its own length until its palm faces up (as for holding a deck) or, with `way` -1, down (laid on the rail). */
@@ -353,7 +477,6 @@ export function palmUp(avatar: Avatar, side: "L" | "R", way = 1) {
   const parent = hand.parent.getWorldQuaternion(new THREE.Quaternion());
   const twist = new THREE.Quaternion().setFromAxisAngle(along, angle);
   hand.quaternion.premultiply(parent.clone().invert().multiply(twist).multiply(parent));
-  avatar.root.updateMatrixWorld(true);
 }
 
 /** The dealer at the rail: the deck in the left hand, palm up, the right hand over it, ready to deal. */
@@ -436,17 +559,13 @@ export function poseStanding(avatar: Avatar) {
  * reads the cards and the table sees the backs. Independent of the hand bones' axes.
  */
 export function cardAnchor(avatar: Avatar, lift = 0): THREE.Object3D {
-  avatar.root.updateMatrixWorld(true);
-  const l = new THREE.Vector3();
-  const r = new THREE.Vector3();
-  avatar.bones.get("Bip01 L Hand")?.getWorldPosition(l);
-  avatar.bones.get("Bip01 R Hand")?.getWorldPosition(r);
-  const mid = avatar.root.worldToLocal(l.add(r).multiplyScalar(0.5));
   const anchor = new THREE.Object3D();
   anchor.name = "cards";
-  // Just above the palms; with `lift` (the first-person player) higher and a little further out, so
-  // the faces are read past the thumbs and the fingertips stay behind the cards.
-  anchor.position.copy(mid).add(new THREE.Vector3(0, 0.09 + lift, 0.03 + lift * 0.4));
+  anchor.position.copy(avatar.seatedShoulders ?? shoulders(avatar)).add(new THREE.Vector3(0, -0.09 + lift * 1.8, 0.34 + lift));
+  const at = avatar.root.localToWorld(anchor.position);
+  at.y = Math.max(at.y, RAIL_TOP + 0.16);
+  avatar.root.worldToLocal(at);
+  anchor.scale.divide(avatar.root.getWorldScale(new THREE.Vector3()));
   anchor.rotation.set(-0.55, Math.PI, 0, "YXZ"); // face the player, leaning back toward the eyes
   avatar.root.add(anchor);
   return anchor;
