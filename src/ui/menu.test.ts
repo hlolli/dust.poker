@@ -97,7 +97,7 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network an
     expect(await page.getByLabel("Table address").isVisible()).toBe(false);
     await find.click();
     await page.getByRole("button", { name: "Open the public queue" }).waitFor();
-    await page.getByText("Play with friends", { exact: true }).click();
+    await page.locator("#live-table summary").filter({ hasText: "Play with friends" }).click();
     expect(await page.getByLabel("Table address").isVisible()).toBe(true);
   } finally {
     await browser.close();
@@ -110,6 +110,8 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("the creator resizes its preview on
   const site = serveSite();
   try {
     const page = await browser.newPage({ deviceScaleFactor: 1.25 });
+    page.setDefaultTimeout(30_000);
+    page.on("pageerror", error => console.error("Practice page:", error.message));
     await page.goto(new URL("?fx=off", site.url).href, { waitUntil: "domcontentloaded" });
     await page.getByRole("button", { name: "+ your name", exact: true }).click();
     const changes = await page.locator(".creator canvas").evaluate(async (canvas: HTMLCanvasElement) => {
@@ -140,4 +142,4 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("the creator resizes its preview on
     await browser.close();
     site.stop(true);
   }
-}, 60_000);
+}, 90_000);

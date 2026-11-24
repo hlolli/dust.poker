@@ -25,7 +25,7 @@ export const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padSta
 export const bytes = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
 const HOUR = 3_600_000;
 
-/** The genesis seeds of the dev preset: 00..01 to 00..04, each holding Night. */
+/** Short development seeds. The dev preset funds the first three and a separate 64-byte seed. */
 export const seed = (n: number) => "00".repeat(31) + n.toString(16).padStart(2, "0");
 
 export async function scriptWallet(name: string, seedHex: string, log: (line: string) => void = console.log): Promise<ScriptWallet> {

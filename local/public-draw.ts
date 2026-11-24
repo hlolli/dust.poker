@@ -12,10 +12,18 @@ const { snapshot } = (await import(`${root}/src/live/indexer.ts`)) as typeof imp
 
 async function main() {
   await ready();
-  const wallets = await Promise.all([1, 2, 3, 4].map((i) => scriptWallet(`Player ${i}`, seed(i))));
+  // Public genesis fixtures from the pinned node image:
+  // https://github.com/midnightntwrk/midnight-node/blob/node-2.1.101/Earthfile#L322-L325
+  const genesis = [
+    seed(1),
+    seed(2),
+    seed(3),
+    "a51c86de32d0791f7cffc3bdff1abd9bb54987f0ed5effc30c936dddbb9afd9d530c8db445e4f2d3ea42a321b260e022aadf05987c9a67ec7b6b6ca1d0593ec9",
+  ];
+  const wallets = await Promise.all(genesis.map((master, i) => scriptWallet(`Player ${i + 1}`, master)));
   try {
     const people = wallets.map((w, i) => {
-      const p: Profile = { id: w.name, name: w.name, look: DEFAULT_LOOK, secret: String(BigInt("0x" + seed(i + 1))) };
+      const p: Profile = { id: w.name, name: w.name, look: DEFAULT_LOOK, secret: String(i + 1) };
       const memory = new Map<string, string>();
       const store = {
         getItem: (k: string) => memory.get(k) ?? null,

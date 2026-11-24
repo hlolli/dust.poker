@@ -1,5 +1,5 @@
 # A Midnight network on this machine, the "undeployed" one: a node with the dev preset (four
-# genesis wallets, seeds 00..01 to 00..04, hold the Night) and a proof server, both from Docker
+# funded genesis wallets, listed in public-draw.ts) and a proof server, both from Docker
 # Hub, alongside the released Ledger 9 indexer. All three services keep their development
 # state in their containers; compose down removes that state together.
 #
