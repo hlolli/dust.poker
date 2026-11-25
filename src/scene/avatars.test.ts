@@ -5,6 +5,7 @@ import { emptyTable } from "../referee/rules.ts";
 import { type Avatar, cardAnchor, dealerReach, holdCards, loadAvatar, poseDealer, poseHands, poseSeated } from "./avatars.ts";
 import { CARD_H, CARD_W } from "./cards.ts";
 import { Life } from "./life.ts";
+import { reduceAvatarDetail } from "./avatar-detail.ts";
 import { Manner } from "./manner.ts";
 import { MODELS, STAFF } from "./models.ts";
 import { FELT_TOP, RAIL_RADIUS, RAIL_TOP, TABLE_RADIUS, seatPose } from "./table.ts";
@@ -17,6 +18,29 @@ const geometryLoader = new GLTFLoader().register(parser => ({
 }));
 const loadFiles = () => spyOn(GLTFLoader.prototype, "loadAsync").mockImplementation(async (url) =>
   geometryLoader.parseAsync(await Bun.file(url).arrayBuffer(), ""));
+
+test("low-detail triangles use the original rig, face shapes and card anchors", async () => {
+  const files = loadFiles();
+  try {
+    const a = await loadAvatar(STAFF.dealer);
+    poseDealer(a);
+    const hand = a.hand("R").getWorldPosition(new THREE.Vector3());
+    const parts: THREE.SkinnedMesh[] = [];
+    a.root.traverse(o => { if (o instanceof THREE.SkinnedMesh) parts.push(o); });
+    const triangles = () => parts.reduce((sum, p) => sum + Math.min(p.geometry.drawRange.count, p.geometry.index!.count) / 3, 0);
+    const full = triangles();
+    await reduceAvatarDetail(a);
+    const low = triangles();
+    expect(low).toBeLessThan(full * 0.5);
+    await reduceAvatarDetail(a);
+    expect(triangles()).toBe(low);
+    expect(a.hand("R").getWorldPosition(new THREE.Vector3()).distanceTo(hand)).toBe(0);
+    a.face("EyeBlinkLeft", 1);
+    expect(parts.some(p => p.morphTargetInfluences?.includes(1))).toBe(true);
+  } finally {
+    files.mockRestore();
+  }
+});
 
 function tableView(you: number) {
   const previous = Object.getOwnPropertyDescriptor(globalThis, "document");

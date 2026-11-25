@@ -18,12 +18,12 @@ export const fxOn = () => new URLSearchParams(location.search).get("fx") !== "of
  * Only the `keep` groups are in the picture: people and cards move, and a reflection taken
  * from one point cannot follow them.
  */
-export async function reflectRoom(renderer: THREE.WebGLRenderer, scene: THREE.Scene, keep: THREE.Object3D[], ready: Promise<void>): Promise<void> {
+export async function reflectRoom(renderer: THREE.WebGLRenderer, scene: THREE.Scene, keep: THREE.Object3D[], ready: Promise<void>, size = 256): Promise<void> {
   await ready;
   const hidden = scene.children.filter((o) => o.visible && !keep.includes(o) && !(o as THREE.Light).isLight);
   for (const o of hidden) o.visible = false;
   const pmrem = new THREE.PMREMGenerator(renderer);
-  const target = pmrem.fromScene(scene, 0, 0.1, 40, { size: 256, position: new THREE.Vector3(0, 1.8, 0) });
+  const target = pmrem.fromScene(scene, 0, 0.1, 40, { size, position: new THREE.Vector3(0, 1.8, 0) });
   pmrem.dispose();
   for (const o of hidden) o.visible = true;
   const before = scene.environment;
@@ -44,7 +44,7 @@ export function shadowed<T extends THREE.Object3D>(o: T): T {
 }
 
 /** Shadows on: the renderer's map, a lamp over the table that casts them, and the objects that take part. */
-export function lightTable(renderer: THREE.WebGLRenderer, scene: THREE.Scene, casters: THREE.Object3D[]): void {
+export function lightTable(renderer: THREE.WebGLRenderer, scene: THREE.Scene, casters: THREE.Object3D[]): THREE.SpotLight {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap; // three 0.186 dropped the soft variant; the radius below blurs instead
   // The card-room lamp: a warm spot from above the table, tight enough for a crisp map.
@@ -60,19 +60,19 @@ export function lightTable(renderer: THREE.WebGLRenderer, scene: THREE.Scene, ca
   lamp.shadow.radius = 3;
   scene.add(lamp, lamp.target);
   for (const c of casters) shadowed(c);
+  return lamp;
 }
 
-export type Fx = { render(): void; setSize(width: number, height: number): void };
+export type Fx = { render(): void; setSize(width: number, height: number): void; dispose(): void };
 
 /** The post-processing chain: the scene, ambient occlusion, then tone mapping and colour space. */
 export function postprocessing(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera): Fx {
-  const size = renderer.getSize(new THREE.Vector2());
+  const size = renderer.getSize(new THREE.Vector2()).multiplyScalar(renderer.getPixelRatio()).floor();
   // Multisampled target: the composer would otherwise lose the canvas's antialiasing.
   const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: 4 });
   const composer = new EffectComposer(renderer, target);
-  // An explicit target gives the composer its logical size. Let it apply the device
-  // pixel ratio once, both to the buffers here and to passes added below.
-  composer.setSize(size.x, size.y);
+  // All targets use drawing-buffer pixels, including after moving to another display.
+  composer.setPixelRatio(1);
   composer.addPass(new RenderPass(scene, camera));
   const gtao = new GTAOPass(scene, camera, size.x, size.y);
   gtao.output = GTAOPass.OUTPUT.Default;
@@ -109,6 +109,13 @@ export function postprocessing(renderer: THREE.WebGLRenderer, scene: THREE.Scene
         shadow.autoUpdate = autoUpdate;
       }
     },
-    setSize: (w, h) => composer.setSize(w, h),
+    setSize: (w, h) => composer.setSize(Math.floor(w * renderer.getPixelRatio()), Math.floor(h * renderer.getPixelRatio())),
+    dispose() {
+      for (const pass of composer.passes) pass.dispose();
+      // GTAOPass.dispose in Three r186 omits these two shader materials.
+      gtao.gtaoMaterial.dispose();
+      gtao.blendMaterial.dispose();
+      composer.dispose();
+    },
   };
 }

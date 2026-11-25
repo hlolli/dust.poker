@@ -5,6 +5,8 @@ No-Limit Texas Hold'em in a 3D casino room, desktop and WebXR, refereed by a sma
 - Glossary: [CONTEXT.md](CONTEXT.md)
 - Decisions: [docs/adr/](docs/adr/)
 
+The 3D lounge requests high-performance WebGL 2. If frames stay slow, it lowers the drawing resolution and turns down lighting effects. Software WebGL starts in low detail. You can [open the low-detail lounge](https://dust.poker/?quality=low) or add `&quality=low` to a table invitation. Cards in the hand panel and betting controls stay at screen resolution.
+
 ## Develop
 
 ```

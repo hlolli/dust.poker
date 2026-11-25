@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
 import { type Fx, fxOn, lightTable, postprocessing, reflectRoom, shadowed } from "./scene/fx.ts";
+import { loungeRenderer, WEBGL_UNAVAILABLE } from "./scene/quality.ts";
 import { texturesReady } from "./scene/materials.ts";
 import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
 import type { Action, Referee, TableState } from "./referee/types.ts";
@@ -45,13 +46,19 @@ const ENTRANCE = new THREE.Vector3(0, 0, 5.2);
 export async function enterRoom(entry: Entry) {
   const { profile } = entry;
   const YOU = entry.mode === "live" ? entry.seat.index : 0;
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(window.innerWidth, window.innerHeight);
+  const graphics = loungeRenderer(document.createElement("canvas"), location.search);
+  if (!graphics) {
+    alert(WEBGL_UNAVAILABLE);
+    location.reload();
+    return;
+  }
+  const { renderer, quality } = graphics;
+  const pixelRatio = () => quality.pixelRatio(window.innerWidth, window.innerHeight, window.devicePixelRatio);
+  renderer.setDrawingBufferSize(window.innerWidth, window.innerHeight, pixelRatio());
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.xr.enabled = true;
   document.body.append(renderer.domElement);
-  const stats = { frames: 0 }; // inspection handle: window.__stats.frames, for a frame-rate check on any device
+  const stats = { frames: 0, get quality() { return quality.level; } };
   Object.assign(window as unknown as Record<string, unknown>, { __stats: stats });
   // Browser first: the VR entry button appears only where WebXR says a headset session is
   // possible, so a desktop browser never shows a warning about it.
@@ -60,7 +67,8 @@ export async function enterRoom(entry: Entry) {
   const scene = new THREE.Scene();
   // A stand-in to reflect until the hall's own reflection is taken (reflectRoom, below).
   const pmrem = new THREE.PMREMGenerator(renderer);
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  const environmentSize = quality.level === "low" ? 64 : 256;
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04, 0.1, 100, { size: environmentSize }).texture;
   scene.environmentIntensity = 0.35;
   pmrem.dispose();
   const room = createRoom();
@@ -90,8 +98,8 @@ export async function enterRoom(entry: Entry) {
   // Nothing above ever moves: world matrices once, then no per-frame matrix work.
   for (const o of [room, table, bar, seats, splash]) freeze(o);
   // Only the furniture around the table is inside the lamp's shadow cone.
-  if (fxOn()) lightTable(renderer, scene, [table, seats]);
-  void reflectRoom(renderer, scene, [room, table, bar, seats, splash], texturesReady());
+  const lamp = fxOn() && quality.level !== "low" ? lightTable(renderer, scene, [table, seats]) : null;
+  void reflectRoom(renderer, scene, [room, table, bar, seats, splash], texturesReady(), environmentSize);
 
   // One character per seat, seated and facing the table: yours from the profile, the bots the
   // rest. They load while you walk in; whoever is there when you sit hands you the cards.
@@ -100,6 +108,19 @@ export async function enterRoom(entry: Entry) {
   const avatars: (Avatar | null)[] = Array.from({ length: SEAT_COUNT }, () => null);
   /** What moves each character between poses (scene/life.ts): the seats' and the staff's. */
   const lives = new Map<Avatar, Life>();
+  // Spread one-time mesh reductions across tasks when a populated room steps down.
+  let detailWork = Promise.resolve();
+  const simplify = (avatar: Avatar) => {
+    detailWork = detailWork.then(async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      const { reduceAvatarDetail } = await import("./scene/avatar-detail.ts");
+      await reduceAvatarDetail(avatar);
+    }).catch(error => console.warn("Avatar detail", error));
+  };
+  const addAvatar = (avatar: Avatar) => {
+    scene.add(lamp?.castShadow ? shadowed(avatar.root) : avatar.root);
+    if (quality.level === "low") simplify(avatar);
+  };
   let dealerAvatar: Avatar | null = null;
   /** How each seated player handles their cards and rests (scene/manner.ts), once their cards are theirs. */
   const manners: (Manner | null)[] = Array.from({ length: SEAT_COUNT }, () => null);
@@ -126,14 +147,14 @@ export async function enterRoom(entry: Entry) {
           applyLook(a, profile.look);
           a.root.position.copy(ENTRANCE);
           poseWalking(a, 0);
-          scene.add(fxOn() ? shadowed(a.root) : a.root);
+          addAvatar(a);
           avatars[i] = a;
           lives.set(a, new Life(a, { seed: i, head: false }));
           entrance = { avatar: a, t0: performance.now() + 300 };
           return;
         }
         poseSeated(a, 0.5);
-        scene.add(fxOn() ? shadowed(a.root) : a.root);
+        addAvatar(a);
         avatars[i] = a;
         lives.set(a, new Life(a, { seed: i }));
         attachCards?.(i, a);
@@ -154,7 +175,7 @@ export async function enterRoom(entry: Entry) {
         a.root.name = name;
         if (name === "dealer") poseDealer(a);
         else poseStanding(a);
-        scene.add(fxOn() ? shadowed(a.root) : a.root);
+        addAvatar(a);
         if (name === "dealer") {
           dressAsDealer(a, study?.jacket);
           deckInHand(a, study?.cardBack);
@@ -419,10 +440,11 @@ export async function enterRoom(entry: Entry) {
   function fitViewport() {
     if (renderer.xr.isPresenting) return;
     renderer.getSize(viewport);
-    if (viewport.x === window.innerWidth && viewport.y === window.innerHeight) return;
+    const ratio = pixelRatio();
+    if (viewport.x === window.innerWidth && viewport.y === window.innerHeight && ratio === renderer.getPixelRatio()) return;
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setDrawingBufferSize(window.innerWidth, window.innerHeight, ratio);
     fx?.setSize(window.innerWidth, window.innerHeight);
   }
 
@@ -432,9 +454,26 @@ export async function enterRoom(entry: Entry) {
     const me = avatars[YOU];
     if (me) showOwnHead(me, out);
   });
-  const fx: Fx | null = fxOn() ? postprocessing(renderer, scene, camera) : null;
+  let fx: Fx | null = lamp ? postprocessing(renderer, scene, camera) : null;
+  const resetTiming = () => quality.resetTiming();
+  document.addEventListener("visibilitychange", resetTiming);
+  renderer.xr.addEventListener("sessionend", resetTiming);
   renderer.setAnimationLoop((now) => {
     stats.frames++;
+    const previous = quality.level;
+    if (!renderer.xr.isPresenting && !document.hidden && quality.frame(now) && quality.level !== previous) {
+      fx?.dispose();
+      fx = null;
+      if (quality.level === "low") {
+        renderer.shadowMap.enabled = false;
+        if (lamp) {
+          lamp.visible = false;
+          lamp.castShadow = false;
+          lamp.shadow.dispose();
+        }
+        for (const avatar of lives.keys()) simplify(avatar);
+      }
+    }
     fitViewport();
     view?.animate(now);
     entranceFrame(now);

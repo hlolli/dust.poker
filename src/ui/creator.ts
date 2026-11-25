@@ -4,6 +4,7 @@ import { type Avatar, loadAvatar, poseStanding } from "../scene/avatars.ts";
 import { Life } from "../scene/life.ts";
 import { applyLook, DEFAULT_LOOK, type Look, OUTFIT_COLOURS } from "../scene/look.ts";
 import { MODELS } from "../scene/models.ts";
+import { loungeRenderer, WEBGL_UNAVAILABLE } from "../scene/quality.ts";
 
 /**
  * The character creator: a name, and a character turning slowly under a spotlight while the
@@ -26,16 +27,20 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
         <fieldset><legend>Height</legend><input type="range" name="height" min="0.92" max="1.08" step="0.01" value="${look.height}" /></fieldset>
         <div class="row"><button type="submit" class="save">${initial ? "Keep this look" : "Take this name"}</button><button type="button" class="cancel">Never mind</button></div>
       </form>`;
-    document.body.append(el);
-
     // The stage: a small renderer, the character standing under a warm key light, turning.
     const canvas = el.querySelector("canvas")!;
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    const graphics = loungeRenderer(canvas, location.search, true);
+    if (!graphics) {
+      alert(WEBGL_UNAVAILABLE);
+      resolve(null);
+      return;
+    }
+    const { renderer, quality } = graphics;
+    document.body.append(el);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     const scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04, 0.1, 100, { size: quality.level === "low" ? 64 : 256 }).texture;
     scene.environmentIntensity = 0.5;
     pmrem.dispose();
     const key = new THREE.SpotLight(0xffe0b0, 40, 12, 0.5, 0.6, 1.5);
@@ -64,20 +69,22 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
     };
     void setModel(look.model);
     let frame = 0;
-    const stageSize = new THREE.Vector2();
     const size = () => {
       const w = canvas.clientWidth || 320;
       const h = canvas.clientHeight || 480;
-      if (w === stageSize.x && h === stageSize.y) return;
-      stageSize.set(w, h);
-      renderer.setSize(w, h, false);
+      const ratio = quality.pixelRatio(w, h, window.devicePixelRatio);
+      if (canvas.width === Math.floor(w * ratio) && canvas.height === Math.floor(h * ratio) && camera.aspect === w / h) return;
+      renderer.setDrawingBufferSize(w, h, ratio);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     };
     size();
     const observer = new ResizeObserver(size);
     observer.observe(canvas);
+    const resetTiming = () => quality.resetTiming();
+    document.addEventListener("visibilitychange", resetTiming);
     const loop = (now: number) => {
+      if (!document.hidden && quality.frame(now)) size();
       if (avatar) avatar.root.rotation.y = Math.sin(now / 4000) * 0.6;
       // Mostly at you, as into a mirror: the camera is where you stand.
       life?.apply(now, { focus: camera.position, others: [], deciding: false });
@@ -103,6 +110,7 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
       loading++;
       cancelAnimationFrame(frame);
       observer.disconnect();
+      document.removeEventListener("visibilitychange", resetTiming);
       renderer.dispose();
       renderer.forceContextLoss();
       el.remove();

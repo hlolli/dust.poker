@@ -57,6 +57,8 @@ The site ships the Latin subsets of Cormorant Garamond (regular and italic) and 
 
 ## Card room website (src/assets/site/)
 
+The 3D lounge uses Arseny Kapoulkine’s meshoptimizer to simplify character meshes in low detail. The site includes its [MIT licence](https://dust.poker/club/meshoptimizer-MIT.txt).
+
 The house spade is original dust.poker artwork. The playing-card illustration and its social preview were made with ImageGen for dust.poker. The table image shows the game's room and characters as rendered in play. The site artwork is released under the [MIT licence](LICENSE), with the underlying room and character assets credited above.
 
 ## Contracts and prover
