@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { VRButton } from "three/addons/webxr/VRButton.js";
-import { type Fx, fxOn, lightTable, postprocessing, reflectRoom, shadowed } from "./scene/fx.ts";
+import { type Fx, fxOn, lightTable, postprocessing, reflectRoom, shadowed, useDiffuseLighting } from "./scene/fx.ts";
 import { loungeRenderer, WEBGL_UNAVAILABLE } from "./scene/quality.ts";
 import { texturesReady } from "./scene/materials.ts";
 import { ready as runtimeReady } from "./compact/onchain-runtime-shim.js";
@@ -108,6 +108,7 @@ export async function enterRoom(entry: Entry) {
   const avatars: (Avatar | null)[] = Array.from({ length: SEAT_COUNT }, () => null);
   /** What moves each character between poses (scene/life.ts): the seats' and the staff's. */
   const lives = new Map<Avatar, Life>();
+  let diffuse = false;
   // Spread one-time mesh reductions across tasks when a populated room steps down.
   let detailWork = Promise.resolve();
   const simplify = (avatar: Avatar) => {
@@ -118,6 +119,7 @@ export async function enterRoom(entry: Entry) {
     }).catch(error => console.warn("Avatar detail", error));
   };
   const addAvatar = (avatar: Avatar) => {
+    if (diffuse) useDiffuseLighting(avatar.root);
     scene.add(lamp?.castShadow ? shadowed(avatar.root) : avatar.root);
     if (quality.level === "low") simplify(avatar);
   };
@@ -175,12 +177,12 @@ export async function enterRoom(entry: Entry) {
         a.root.name = name;
         if (name === "dealer") poseDealer(a);
         else poseStanding(a);
-        addAvatar(a);
         if (name === "dealer") {
           dressAsDealer(a, study?.jacket);
           deckInHand(a, study?.cardBack);
           dealerAvatar = a;
         }
+        addAvatar(a);
         lives.set(a, new Life(a, { seed: name === "dealer" ? 11 : 12, standing: true }));
       })
       .catch((e) => console.warn(`${name} failed to load`, e));
@@ -461,10 +463,15 @@ export async function enterRoom(entry: Entry) {
   renderer.setAnimationLoop((now) => {
     stats.frames++;
     const previous = quality.level;
-    if (!renderer.xr.isPresenting && !document.hidden && quality.frame(now) && quality.level !== previous) {
+    if (!renderer.xr.isPresenting && !document.hidden && quality.frame(now)) {
       fx?.dispose();
       fx = null;
-      if (quality.level === "low") {
+      if (previous === "low") {
+        diffuse = true;
+        for (const root of [room, table, bar, seats, splash]) useDiffuseLighting(root);
+        for (const avatar of lives.keys()) useDiffuseLighting(avatar.root);
+        scene.add(new THREE.HemisphereLight(0xffeed9, 0x614b48, 1.3));
+      } else if (quality.level === "low") {
         renderer.shadowMap.enabled = false;
         if (lamp) {
           lamp.visible = false;

@@ -10,6 +10,30 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 
 export const fxOn = () => new URLSearchParams(location.search).get("fx") !== "off";
 
+const diffuseMaterials = new WeakMap<THREE.MeshStandardMaterial, THREE.MeshLambertMaterial>();
+
+/** For the slowest frames, use diffuse lighting on opaque surfaces. Keep glass,
+ * signs and the jukebox on their own materials, and keep hair and lashes cut out. */
+export function useDiffuseLighting(root: THREE.Object3D) {
+  root.traverse(object => {
+    const mesh = object as THREE.Mesh;
+    const original = mesh.material;
+    if (!(original instanceof THREE.MeshStandardMaterial) || original.transparent || original.emissiveMap || original.emissive.getHex() !== 0) return;
+    let material = diffuseMaterials.get(original);
+    if (!material) {
+      material = new THREE.MeshLambertMaterial({
+        name: original.name, color: original.color, map: original.map, vertexColors: original.vertexColors,
+        side: original.side, alphaMap: original.alphaMap, alphaTest: original.alphaTest, alphaToCoverage: original.alphaToCoverage,
+        opacity: original.opacity, visible: original.visible, depthTest: original.depthTest, depthWrite: original.depthWrite,
+        colorWrite: original.colorWrite, polygonOffset: original.polygonOffset, polygonOffsetFactor: original.polygonOffsetFactor,
+        polygonOffsetUnits: original.polygonOffsetUnits,
+      });
+      diffuseMaterials.set(original, material);
+    }
+    mesh.material = material;
+  });
+}
+
 /**
  * The room's own reflections: a cube map of the hall taken once from above the table, once its
  * textures have loaded, as the scene's environment. Marble, brass, chrome and the rail then
