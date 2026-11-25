@@ -14,17 +14,18 @@ import { loungeRenderer, WEBGL_UNAVAILABLE } from "../scene/quality.ts";
 export function showCreator(initial?: { name: string; look: Look }): Promise<{ name: string; look: Look } | null> {
   return new Promise((resolve) => {
     const look: Look = { ...DEFAULT_LOOK, ...initial?.look };
-    const el = document.createElement("section");
+    const el = document.createElement("dialog");
     el.className = "creator";
+    el.setAttribute("aria-labelledby", "creator-title");
     el.innerHTML = `
-      <div class="stage"><canvas></canvas></div>
+      <div class="stage"><canvas aria-hidden="true"></canvas><p class="preview-status" role="status"></p><button type="button" class="preview-motion"></button></div>
       <form class="controls">
-        <h2>${initial ? "Change your look" : "Who are you tonight?"}</h2>
-        <label class="field"><span>Name on the plate</span><input name="name" maxlength="24" autocomplete="off" required value="${escape(initial?.name ?? "")}" placeholder="What the table calls you" /></label>
+        <h2 id="creator-title">${initial ? "Change your look" : "Who are you tonight?"}</h2>
+        <label class="field"><span>Name on the plate</span><input name="name" maxlength="24" autocomplete="off" autofocus required value="${escape(initial?.name ?? "")}" placeholder="What the table calls you" /></label>
         <fieldset><legend>Build</legend><div class="tickets">${MODELS.map((m, i) => `<label class="ticket"><input type="radio" name="model" value="${i}" ${i === look.model ? "checked" : ""}/><span>${m.label}</span></label>`).join("")}</div></fieldset>
-        <fieldset><legend>Skin</legend><input type="range" name="skin" min="0" max="1" step="0.02" value="${look.skin}" /></fieldset>
-        <fieldset><legend>Outfit</legend><div class="swatches">${OUTFIT_COLOURS.map((c) => `<label class="swatch"><input type="radio" name="outfit" value="${c}" ${c === look.outfit ? "checked" : ""}/><span style="background:${c}"></span></label>`).join("")}</div></fieldset>
-        <fieldset><legend>Height</legend><input type="range" name="height" min="0.92" max="1.08" step="0.01" value="${look.height}" /></fieldset>
+        <label class="field"><span>Skin tone</span><input type="range" name="skin" min="0" max="1" step="0.02" value="${look.skin}" /></label>
+        <fieldset><legend>Outfit</legend><div class="swatches">${Object.entries(OUTFIT_COLOURS).map(([name, c]) => `<label class="swatch" title="${name}"><input type="radio" name="outfit" aria-label="${name}" value="${c}" ${c === look.outfit ? "checked" : ""}/><span style="background:${c}"></span></label>`).join("")}</div></fieldset>
+        <label class="field"><span>Height</span><input type="range" name="height" min="0.92" max="1.08" step="0.01" value="${look.height}" /></label>
         <div class="row"><button type="submit" class="save">${initial ? "Keep this look" : "Take this name"}</button><button type="button" class="cancel">Never mind</button></div>
       </form>`;
     // The stage: a small renderer, the character standing under a warm key light, turning.
@@ -37,6 +38,7 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
     }
     const { renderer, quality } = graphics;
     document.body.append(el);
+    el.showModal();
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     const scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(renderer);
@@ -55,9 +57,17 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
     let avatar: Avatar | null = null;
     let life: Life | null = null;
     let loading = 0;
+    const previewStatus = el.querySelector<HTMLElement>(".preview-status")!;
     const setModel = async (model: number) => {
       const id = ++loading;
-      const a = await loadAvatar(MODELS[model]?.url ?? MODELS[0]!.url);
+      previewStatus.textContent = "Loading character…";
+      let a: Avatar;
+      try {
+        a = await loadAvatar(MODELS[model]?.url ?? MODELS[0]!.url);
+      } catch {
+        if (id === loading) previewStatus.textContent = "Character preview unavailable.";
+        return;
+      }
       if (id !== loading) return; // a later choice won
       if (avatar) scene.remove(avatar.root);
       avatar = a;
@@ -66,9 +76,17 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
       life = new Life(a, { seed: model, standing: true });
       applyLook(a, look);
       scene.add(a.root);
+      previewStatus.textContent = "";
+      requestFrame();
     };
     void setModel(look.model);
+    const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+    const motion = el.querySelector<HTMLButtonElement>(".preview-motion")!;
+    let animated = !reducedMotion.matches;
     let frame = 0;
+    function requestFrame() {
+      if (!frame) frame = requestAnimationFrame(draw);
+    }
     const size = () => {
       const w = canvas.clientWidth || 320;
       const h = canvas.clientHeight || 480;
@@ -77,22 +95,36 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
       renderer.setDrawingBufferSize(w, h, ratio);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      requestFrame();
     };
     size();
     const observer = new ResizeObserver(size);
     observer.observe(canvas);
     const resetTiming = () => quality.resetTiming();
     document.addEventListener("visibilitychange", resetTiming);
-    const loop = (now: number) => {
-      if (!document.hidden && quality.frame(now)) size();
-      if (avatar) avatar.root.rotation.y = Math.sin(now / 4000) * 0.6;
-      // Mostly at you, as into a mirror: the camera is where you stand.
-      life?.apply(now, { focus: camera.position, others: [], deciding: false });
+    function draw(now: number) {
+      frame = 0;
+      if (animated) {
+        if (!document.hidden && quality.frame(now)) size();
+        if (avatar) avatar.root.rotation.y = Math.sin(now / 4000) * 0.6;
+        life?.apply(now, { focus: camera.position, others: [], deciding: false });
+      }
       renderer.render(scene, camera);
-      life?.restore();
-      frame = requestAnimationFrame(loop);
+      if (animated) {
+        life?.restore();
+        requestFrame();
+      }
+    }
+    const setAnimation = (on: boolean) => {
+      animated = on;
+      motion.textContent = on ? "Pause preview" : "Play preview";
+      quality.resetTiming();
+      requestFrame();
     };
-    frame = requestAnimationFrame(loop);
+    const followPreference = () => setAnimation(!reducedMotion.matches);
+    reducedMotion.addEventListener("change", followPreference);
+    motion.onclick = () => setAnimation(!animated);
+    followPreference();
 
     // The controls change the look as they move.
     const form = el.querySelector<HTMLFormElement>("form")!;
@@ -104,15 +136,20 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
       else if (t.name === "hair") look.hair = t.value;
       else if (t.name === "outfit") look.outfit = t.value;
       else return;
-      if (avatar && t.name !== "model") applyLook(avatar, look);
+      if (avatar && t.name !== "model") {
+        applyLook(avatar, look);
+        requestFrame();
+      }
     };
     const close = (result: { name: string; look: Look } | null) => {
       loading++;
       cancelAnimationFrame(frame);
       observer.disconnect();
+      reducedMotion.removeEventListener("change", followPreference);
       document.removeEventListener("visibilitychange", resetTiming);
       renderer.dispose();
       renderer.forceContextLoss();
+      el.close();
       el.remove();
       resolve(result);
     };
@@ -121,7 +158,7 @@ export function showCreator(initial?: { name: string; look: Look }): Promise<{ n
       close({ name: (form.elements.namedItem("name") as HTMLInputElement).value.trim().slice(0, 24) || "Player", look: { ...look } });
     };
     form.querySelector<HTMLButtonElement>(".cancel")!.onclick = () => close(null);
-    (form.elements.namedItem("name") as HTMLInputElement).focus();
+    el.oncancel = (event) => { event.preventDefault(); close(null); };
   });
 }
 

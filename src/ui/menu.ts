@@ -52,15 +52,14 @@ export function showMenu(): Promise<Entry> {
       const made = await editLook();
       return made ? createProfile(made.name, made.look) : null;
     };
-    const renderProfiles = () => {
+    const renderProfiles = (focusActive = false) => {
       const { active, list } = profiles();
       const add = document.createElement("button");
       add.type = "button";
       add.className = "plate add";
       add.textContent = list.length ? "+ another" : "+ your name";
       add.onclick = async () => {
-        await newProfile();
-        renderProfiles();
+        if (await newProfile()) renderProfiles(true);
       };
       plates.replaceChildren(
         ...list.map((p) => {
@@ -68,32 +67,39 @@ export function showMenu(): Promise<Entry> {
           b.type = "button";
           b.className = `plate${p.id === active ? " active" : ""}`;
           b.title = p.id === active ? "Change your look" : MODELS[p.look.model]?.label ?? "";
+          b.textContent = p.name;
+          b.setAttribute("aria-label", p.id === active ? `${p.name}, change your look` : `Select ${p.name}`);
+          if (p.id === active) b.setAttribute("aria-current", "true");
           b.onclick = async () => {
             if (p.id !== active) activate(p.id);
             else {
               // The plate in use again: back to the creator, keeping the identity.
               const changed = await editLook({ name: p.name, look: p.look });
-              if (changed) updateProfile(p.id, changed.name, changed.look);
+              if (!changed) return;
+              updateProfile(p.id, changed.name, changed.look);
             }
-            renderProfiles();
+            renderProfiles(true);
           };
-          const name = document.createElement("span");
-          name.textContent = p.name;
-          const x = document.createElement("span");
-          x.className = "remove";
-          x.textContent = "×";
-          x.title = "Take this plate down";
-          x.onclick = (e) => {
-            e.stopPropagation();
-            if (confirm(`Take down "${p.name}"? The identity Live tables know them by goes with it.`)) removeProfile(p.id);
-            renderProfiles();
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "remove";
+          remove.textContent = "×";
+          remove.title = `Remove ${p.name}`;
+          remove.setAttribute("aria-label", remove.title);
+          remove.onclick = () => {
+            if (!confirm(`Take down "${p.name}"? The identity Live tables know them by goes with it.`)) return;
+            removeProfile(p.id);
+            renderProfiles(true);
           };
-          b.append(name, x);
-          return b;
+          const pair = document.createElement("span");
+          pair.className = "profile-pair";
+          pair.append(b, remove);
+          return pair;
         }),
         add,
       );
       lobby?.render();
+      if (focusActive) (plates.querySelector<HTMLButtonElement>(".active") ?? add).focus({ preventScroll: true });
     };
     renderProfiles();
 

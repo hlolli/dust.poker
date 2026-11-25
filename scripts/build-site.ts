@@ -19,6 +19,7 @@ for (const name of contracts) {
 }
 // Stable public URLs for the social preview and locally hosted fonts with their licences.
 cpSync(`${root}/src/assets/site/club`, `${root}/dist/club`, { recursive: true });
+for (const file of ["robots.txt", "sitemap.xml"]) cpSync(`${root}/src/assets/site/${file}`, `${root}/dist/${file}`);
 cpSync(`${root}/node_modules/meshoptimizer/LICENSE.md`, `${root}/dist/club/meshoptimizer-MIT.txt`);
 const result = await Bun.build({
   entrypoints: [`${root}/src/index.html`],

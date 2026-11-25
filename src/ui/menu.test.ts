@@ -4,6 +4,8 @@ import { chromium } from "playwright-core";
 import { serveSite } from "../../scripts/browser-test-site.ts";
 import { tableLink } from "./table-invite.ts";
 
+declare const axe: typeof import("axe-core");
+
 test("a copied invite carries only the table and its network", () => {
   expect(tableLink("preview", "AB".repeat(32), "https://user:pass@example.test/poker?wallet=private&keys=local#tables"))
     .toBe(`https://example.test/poker?network=preview&table=${"ab".repeat(32)}`);
@@ -14,7 +16,12 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("the field guides work on mobile wi
   const site = serveSite();
   try {
     const page = await browser.newPage({ javaScriptEnabled: false, viewport: { width: 360, height: 780 } });
-    await page.goto(site.url.href);
+    await page.goto(new URL("?network=preview", site.url).href);
+    expect(await page.locator('link[rel="canonical"]').getAttribute("href")).toBe("https://dust.poker/");
+    const robots = await page.request.get(new URL("robots.txt", site.url).href);
+    expect(await robots.text()).toContain("Sitemap: https://dust.poker/sitemap.xml");
+    const sitemap = await page.request.get(new URL("sitemap.xml", site.url).href);
+    expect((await sitemap.text()).match(/<loc>[^<]+<\/loc>/g)).toEqual(["<loc>https://dust.poker/</loc>"]);
     await page.getByRole("link", { name: "How it works" }).click();
     await page.getByRole("link", { name: "Inspect the protocol" }).click();
     await page.getByRole("heading", { name: "What does a shuffle prove?" }).waitFor();
@@ -29,6 +36,65 @@ test.skipIf(!process.env.POKER_BROWSER_TEST)("the field guides work on mobile wi
     site.stop(true);
   }
 }, 30_000);
+
+test.skipIf(!process.env.POKER_BROWSER_TEST)("the menu and profile editor support keyboard use, narrow screens and reduced motion", async () => {
+  const browser = await chromium.launch({ channel: "chrome", args: ["--enable-unsafe-swiftshader"] });
+  const site = serveSite();
+  try {
+    const page = await browser.newPage({ viewport: { width: 320, height: 720 }, reducedMotion: "reduce" });
+    await page.addInitScript(() => localStorage.setItem("dust.poker/profiles", JSON.stringify({
+      active: "a", list: [{ id: "a", name: "River", secret: "7", model: 0 }],
+    })));
+    await page.goto(new URL("?quality=low", site.url).href);
+    await page.addScriptTag({ path: require.resolve("axe-core/axe.min.js") });
+    const violations = () => page.evaluate(async () => {
+      const result = await axe.run(document, { runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"] } });
+      return result.violations.map(rule => ({ id: rule.id, elements: rule.nodes.map(node => node.target) }));
+    });
+    await page.keyboard.press("Tab");
+    expect(await page.locator(":focus").textContent()).toBe("Skip to the tables");
+    await page.keyboard.press("Enter");
+    expect(await page.locator(":focus").getAttribute("id")).toBe("tables");
+    expect(await violations()).toEqual([]);
+    const arrow = page.locator(".cta span");
+    expect(await arrow.evaluate(el => getComputedStyle(el).transitionDuration)).toBe("0s");
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    expect(await arrow.evaluate(el => getComputedStyle(el).transitionDuration)).not.toBe("0s");
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const enlarged = await page.addStyleTag({ content: "html { font-size: 200% }" });
+    expect(await page.locator(".menu").evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+    await enlarged.evaluate(el => el.parentNode?.removeChild(el));
+
+    const edit = page.getByRole("button", { name: "River, change your look" });
+    await edit.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Change your look" });
+    await dialog.waitFor();
+    await dialog.locator(".preview-status:empty").waitFor({ state: "attached" });
+    expect(await dialog.locator(":focus").getAttribute("name")).toBe("name");
+    await dialog.getByRole("button", { name: "Play preview" }).press("Enter");
+    await dialog.getByRole("button", { name: "Pause preview" }).press("Enter");
+    expect(await dialog.getByRole("slider", { name: "Skin tone" }).count()).toBe(1);
+    expect(await dialog.getByRole("slider", { name: "Height" }).count()).toBe(1);
+    await dialog.getByRole("radio", { name: "Navy" }).press("Space");
+    expect(await dialog.getByRole("radio", { name: "Navy" }).isChecked()).toBe(true);
+    expect(await violations()).toEqual([]);
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "hidden" });
+    expect(await edit.evaluate(el => el === document.activeElement)).toBe(true);
+    await page.keyboard.press("Tab");
+    expect(await page.locator(":focus").getAttribute("aria-label")).toBe("Remove River");
+    page.once("dialog", prompt => prompt.dismiss());
+    await page.keyboard.press("Enter");
+    expect(await edit.count()).toBe(1);
+    page.once("dialog", prompt => prompt.accept());
+    await page.keyboard.press("Enter");
+    await edit.waitFor({ state: "detached" });
+    expect(await page.locator(":focus").textContent()).toBe("+ your name");
+  } finally {
+    await browser.close();
+    site.stop(true);
+  }
+}, 90_000);
 
 test.skipIf(!process.env.POKER_BROWSER_TEST)("a Live invite keeps its network and only opens a table after both indexer checks pass", async () => {
   const fixture = new URL("../../scripts/invite-lobby-fixture.ts", import.meta.url);

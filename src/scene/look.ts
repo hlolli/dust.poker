@@ -23,7 +23,10 @@ export type Look = {
 
 export const DEFAULT_LOOK: Look = { model: 0, skin: 0.3, hair: "#3a2416", outfit: "#2a2a34", height: 1 };
 export const HAIR_COLOURS = ["#f2e2b0", "#c98a3a", "#8a4a1c", "#3a2416", "#151010", "#a83a2a", "#c8c8d0", "#6a2a8a"];
-export const OUTFIT_COLOURS = ["#2a2a34", "#5a1420", "#1f4a3a", "#2a3a6e", "#8a6a1c", "#e8e0cc", "#6a2a8a", "#b8862a"];
+export const OUTFIT_COLOURS = {
+  Charcoal: "#2a2a34", Burgundy: "#5a1420", "Forest green": "#1f4a3a", Navy: "#2a3a6e",
+  Olive: "#8a6a1c", Ivory: "#e8e0cc", Purple: "#6a2a8a", Amber: "#b8862a",
+};
 
 /** Repaints and reshapes a loaded character to a look. Safe to call again with another look. */
 export function applyLook(avatar: Avatar, look: Look) {

@@ -13,6 +13,7 @@ Bun.serve({
   development: { hmr: true, console: true },
   routes: {
     "/": index,
+    ...Object.fromEntries(["robots.txt", "sitemap.xml"].map(name => [`/${name}`, () => new Response(Bun.file(`${root}/src/assets/site/${name}`))])),
     ...Object.fromEntries(readdirSync(club).map(name => [`/club/${name}`, () => new Response(Bun.file(`${club}/${name}`))])),
     ...Object.fromEntries(["deal", "queue", "public-seat"].map(name => [`/${name}/*`, async (req: Request) => {
       const path = new URL(req.url).pathname.slice(name.length + 2);
